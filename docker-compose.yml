@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: exam_system_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS:-}
+      - DATABASE_URL=sqlite:///./exam_system.db
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
+      - DEBUG=${DEBUG:-True}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: exam_system_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+
