@@ -53,6 +53,12 @@ class KnowledgeService:
             json_text = json_text.replace('"', '"').replace('"', '"')
             json_text = re.sub(r',\s*}', '}', json_text)
             json_text = re.sub(r',\s*]', ']', json_text)
+            json_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_text)
+            json_text = json_text.strip()
+            if json_text.startswith('{') and not json_text.endswith('}'):
+                json_text = json_text.rsplit('}', 1)[0] + '}'
+            if json_text.startswith('[') and not json_text.endswith(']'):
+                json_text = json_text.rsplit(']', 1)[0] + ']'
             return json.loads(json_text)
         except Exception as e:
             print(f"JSON parsing error: {e}")
@@ -62,37 +68,23 @@ class KnowledgeService:
         if len(text) > 4000:
             text = text[:4000] + "... [текст сокращен]"
         
-        system_prompt = """Ты - эксперт по дидактике. Извлеки дидактические единицы из текста.
-        Ответ должен быть ТОЛЬКО в формате JSON."""
-        
-        user_prompt = f"""
-        Анализируй следующий текст и выдели дидактические единицы:
-        
-        ТЕКСТ:
-        {text}
-        
-        Для каждой единицы определи:
-        1. unit_id: уникальный ID (латинские буквы и цифры)
-        2. title: четкое название (на русском)
-        3. definition: определение (1-2 предложения)
-        4. examples: 1-2 примера (массив строк)
-        5. common_errors: 1-2 типичные ошибки (массив строк)
-        6. content_type: тип (concept, skill, definition, example)
-        
-        Формат ответа ТОЛЬКО JSON:
+        system_prompt = "Ты эксперт-преподаватель, извлекающий дидактические единицы из текста. Извлекай ключевые концепции, определения, примеры и типичные ошибки."
+        user_prompt = f"""Текст для анализа:
+{text}
+
+Извлеки дидактические единицы из текста. Формат ответа ТОЛЬКО JSON:
+{{
+    "units": [
         {{
-            "units": [
-                {{
-                    "unit_id": "python_var_01",
-                    "title": "Переменная в Python",
-                    "definition": "...",
-                    "examples": ["x = 10"],
-                    "common_errors": ["..."],
-                    "content_type": "concept"
-                }}
-            ]
+            "unit_id": "unit_1",
+            "title": "Название концепции",
+            "content_type": "concept",
+            "definition": "Определение концепции",
+            "examples": ["Пример 1", "Пример 2"],
+            "common_errors": ["Типичная ошибка 1"]
         }}
-        """
+    ]
+}}"""
         
         try:
             messages = [
@@ -151,75 +143,59 @@ class KnowledgeService:
         
         unit = self.knowledge_base[unit_id]
         
-        system_prompt = """Ты - опытный преподаватель. Сгенерируй разнообразные вопросы."""
-        
-        user_prompt = f"""
-        Дидактическая единица: {unit.title}
-        Определение: {unit.definition}
-        Примеры: {json.dumps(unit.examples, ensure_ascii=False)}
-        
-        Сгенерируй {num_questions} вопросов разных типов.
-        
-        Формат ответа ТОЛЬКО JSON:
+        system_prompt = "Ты эксперт-преподаватель, генерирующий вопросы для проверки знаний студентов."
+        user_prompt = f"""Дидактическая единица: {unit.title}
+Определение: {unit.definition}
+Примеры: {json.dumps(unit.examples, ensure_ascii=False)}
+
+Сгенерируй {num_questions} вопросов разных типов.
+
+Формат ответа ТОЛЬКО JSON:
+{{
+    "questions": [
         {{
-            "questions": [
-                {{
-                    "question": "Текст вопроса",
-                    "type": "understanding|application|analysis",
-                    "difficulty": 0.5,
-                    "criteria": [{{"name": "Критерий", "max_score": 2}}],
-                    "reference_answer": "Эталонный ответ"
-                }}
-            ]
+            "question": "Текст вопроса",
+            "type": "understanding|application|analysis",
+            "difficulty": 0.5,
+            "criteria": [{{"name": "Критерий", "max_score": 2}}],
+            "reference_answer": "Эталонный ответ"
         }}
-        """
+    ]
+}}"""
         
         try:
             messages = [
                 Messages(role=MessagesRole.SYSTEM, content=system_prompt),
                 Messages(role=MessagesRole.USER, content=user_prompt)
             ]
-            payload = Chat(messages=messages, temperature=0.7, max_tokens=2000)
+            payload = Chat(messages=messages, temperature=0.5, max_tokens=2000)
             response = self.giga.chat(payload)
             response_text = response.choices[0].message.content
             
             data = self.safe_parse_json(response_text)
-            
-            if not data:
-                return False
-            
-            for q_data in data.get("questions", []):
-                question_obj = {
-                    "question_id": f"q_{len(self.questions_db)}",
-                    "question": q_data["question"],
-                    "type": q_data["type"],
-                    "difficulty": q_data.get("difficulty", 0.5),
-                    "unit_id": unit_id,
-                    "criteria": q_data.get("criteria", []),
-                    "reference_answer": q_data.get("reference_answer", "")
-                }
+            if data and "questions" in data:
+                questions = data["questions"]
+                if "understanding" not in unit.questions:
+                    unit.questions["understanding"] = []
+                if "application" not in unit.questions:
+                    unit.questions["application"] = []
+                if "analysis" not in unit.questions:
+                    unit.questions["analysis"] = []
                 
-                q_type = q_data["type"]
-                if q_type in unit.questions:
-                    unit.questions[q_type].append(question_obj)
+                for q in questions:
+                    q_type = q.get("type", "understanding")
+                    if q_type in unit.questions:
+                        unit.questions[q_type].append(q)
                 
-                emb = self.embedding_model.encode([q_data["question"]])
-                self.question_index.add(emb.astype('float32'))
-                self.questions_db.append(question_obj)
+                return True
             
-            unit.metadata["updated_at"] = datetime.now().isoformat()
-            return True
+            return False
         except Exception as e:
             print(f"Ошибка при генерации вопросов: {e}")
             return False
     
-    def get_all_units(self) -> List[Dict]:
-        return [unit.model_dump() for unit in self.knowledge_base.values()]
-    
     def get_unit(self, unit_id: str) -> Optional[DidacticUnit]:
         return self.knowledge_base.get(unit_id)
     
-    def add_unit(self, unit: DidacticUnit):
-        self.knowledge_base[unit.unit_id] = unit
-        self.knowledge_graph.add_node(unit.unit_id, title=unit.title, type=unit.content_type)
-
+    def get_all_units(self) -> List[DidacticUnit]:
+        return list(self.knowledge_base.values())

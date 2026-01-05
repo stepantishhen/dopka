@@ -5,13 +5,10 @@ python-multipart
 python-dotenv
 gigachat
 sentence-transformers
-faiss-cpu
 numpy
-scikit-learn
 networkx
 pdfplumber
 aiofiles
 requests
-openai
-matplotlib
 pydantic-settings
+faiss-cpu

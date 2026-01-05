@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
   const login = (role, name = '') => {
     const newUser = {
       id: Date.now().toString(),
-      role, // 'student' или 'teacher'
+      role, 
       name: name || (role === 'student' ? 'Студент' : 'Преподаватель'),
       loginTime: new Date().toISOString()
     }

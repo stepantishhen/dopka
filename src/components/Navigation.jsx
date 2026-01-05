@@ -30,13 +30,29 @@ const Navigation = () => {
               Главная
             </Nav.Link>
             {isTeacher() && (
-              <Nav.Link
-                as={Link}
-                to="/knowledge-base"
-                active={location.pathname === '/knowledge-base'}
-              >
-                База знаний
-              </Nav.Link>
+              <>
+                <Nav.Link
+                  as={Link}
+                  to="/exams"
+                  active={location.pathname === '/exams'}
+                >
+                  Экзамены
+                </Nav.Link>
+                <Nav.Link
+                  as={Link}
+                  to="/knowledge-base"
+                  active={location.pathname === '/knowledge-base'}
+                >
+                  База знаний
+                </Nav.Link>
+                <Nav.Link
+                  as={Link}
+                  to="/analytics"
+                  active={location.pathname === '/analytics'}
+                >
+                  Аналитика
+                </Nav.Link>
+              </>
             )}
             <Nav.Link as={Link} to="/history" active={location.pathname === '/history'}>
               История

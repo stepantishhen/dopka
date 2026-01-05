@@ -5,7 +5,7 @@ from pydantic import BaseModel
 class ChatMessage(BaseModel):
     id: str
     text: str
-    sender: str  # 'user' or 'ai'
+    sender: str  
     timestamp: str
 
 

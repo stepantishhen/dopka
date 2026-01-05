@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from typing import List, Optional
+import pdfplumber
+import io
 
 from backend.schemas.exams import (
-    ExamCreate, ExamResponse, ExamSubmission, EvaluationResponse
+    ExamCreate, ExamResponse, ExamSubmission, EvaluationResponse,
+    CreateExamFromMaterialsRequest
 )
 from backend.services.exam_service import ExamService
 from backend.models.exam_system import ExamConfig, StudentAnswer
@@ -73,4 +76,165 @@ async def list_exams(
 ):
     exams = [ExamResponse(**exam.dict()) for exam in service.exams.values()]
     return {"exams": exams, "count": len(exams)}
+
+
+@router.post("/create-from-materials", response_model=ExamResponse)
+async def create_exam_from_materials(
+    request_data: CreateExamFromMaterialsRequest,
+    request: Request = None,
+    service: ExamService = Depends(get_exam_service)
+):
+    knowledge_service = request.app.state.knowledge_service
+    
+
+    if request_data.text:
+        units = knowledge_service.extract_knowledge_from_text(request_data.text)
+        unit_ids = [unit.unit_id for unit in units]
+    elif request_data.unit_ids:
+        unit_ids = request_data.unit_ids
+    else:
+
+        unit_ids = list(knowledge_service.knowledge_base.keys())
+    
+    if not unit_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Не найдено единиц знаний. Загрузите материалы или выберите единицы."
+        )
+    
+
+    all_questions = []
+    for unit_id in unit_ids[:20]:  
+        unit = knowledge_service.get_unit(unit_id)
+        if not unit:
+            continue
+        
+
+        if not unit.questions or sum(len(qs) for qs in unit.questions.values()) == 0:
+            knowledge_service.generate_questions_for_unit(
+                unit_id,
+                num_questions=request_data.questions_per_unit
+            )
+            unit = knowledge_service.get_unit(unit_id)  
+        
+
+        for q_type in ["understanding", "application", "analysis"]:
+            if unit.questions.get(q_type):
+                for q in unit.questions[q_type]:
+                    q_with_unit = q.copy()
+                    q_with_unit["unit_id"] = unit_id
+                    all_questions.append(q_with_unit)
+    
+    if not all_questions:
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось сгенерировать вопросы. Проверьте наличие материалов в базе знаний."
+        )
+    
+
+    if len(all_questions) > request_data.num_questions:
+
+        import random
+        all_questions = random.sample(all_questions, request_data.num_questions)
+    
+
+    exam_config = ExamConfig(
+        name=request_data.name,
+        adaptive=request_data.adaptive,
+        num_questions=len(all_questions),
+        unit_ids=unit_ids
+    )
+    
+
+    exam = service.create_exam(exam_config)
+    
+
+    exam.questions = all_questions
+    
+    return ExamResponse(**exam.dict())
+
+
+@router.post("/create-from-pdf", response_model=ExamResponse)
+async def create_exam_from_pdf(
+    file: UploadFile = File(...),
+    name: Optional[str] = None,
+    num_questions: int = 10,
+    adaptive: bool = True,
+    questions_per_unit: int = 3,
+    request: Request = None,
+    service: ExamService = Depends(get_exam_service)
+):
+    knowledge_service = request.app.state.knowledge_service
+    
+    try:
+
+        contents = await file.read()
+        text = ""
+        with pdfplumber.open(io.BytesIO(contents)) as pdf:
+            for page in pdf.pages[:20]:  
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+        
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Не удалось извлечь текст из PDF")
+        
+
+        units = knowledge_service.extract_knowledge_from_text(text)
+        unit_ids = [unit.unit_id for unit in units]
+        
+        if not unit_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось извлечь единицы знаний из PDF"
+            )
+        
+
+        all_questions = []
+        for unit_id in unit_ids[:20]:
+            unit = knowledge_service.get_unit(unit_id)
+            if not unit:
+                continue
+            
+            if not unit.questions or sum(len(qs) for qs in unit.questions.values()) == 0:
+                knowledge_service.generate_questions_for_unit(
+                    unit_id,
+                    num_questions=questions_per_unit
+                )
+                unit = knowledge_service.get_unit(unit_id)
+            
+            for q_type in ["understanding", "application", "analysis"]:
+                if unit.questions.get(q_type):
+                    for q in unit.questions[q_type]:
+                        q_with_unit = q.copy()
+                        q_with_unit["unit_id"] = unit_id
+                        all_questions.append(q_with_unit)
+        
+        if not all_questions:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось сгенерировать вопросы"
+            )
+        
+
+        if len(all_questions) > num_questions:
+            import random
+            all_questions = random.sample(all_questions, num_questions)
+        
+
+        exam_name = name or file.filename or "Экзамен из PDF"
+        exam_config = ExamConfig(
+            name=exam_name,
+            adaptive=adaptive,
+            num_questions=len(all_questions),
+            unit_ids=unit_ids
+        )
+        
+        exam = service.create_exam(exam_config)
+        exam.questions = all_questions
+        
+        return ExamResponse(**exam.dict())
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка при обработке PDF: {str(e)}")
 

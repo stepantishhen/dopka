@@ -1,18 +1,22 @@
-# Система обучения для студентов и преподавателей
+# Система обучения с виртуальным экзаменатором
 
-Фронтенд приложение на React с использованием Bootstrap для системы обучения с виртуальным экзаменатором.
+Мульти-агентная система для обучения студентов с использованием LLM и адаптивных экзаменов.
 
 ## Возможности
 
 ### Для студентов:
-- Экзамены - общение с виртуальным экзаменатором в режиме реального времени
-- История - просмотр всех пройденных экзаменов
-- Профиль - настройки и статистика обучения
+- Экзамены в диалоговом режиме с виртуальным экзаменатором
+- Адаптивные вопросы на основе производительности
+- Уточняющие вопросы и обратная связь
+- История пройденных экзаменов
+- Профиль и статистика обучения
 
 ### Для преподавателей:
-- База знаний - управление учебными материалами (создание, редактирование, удаление)
-- История - просмотр всех диалогов студентов
-- Профиль - настройки и статистика системы
+- Создание экзаменов из материалов (текст/PDF)
+- Управление базой знаний
+- Просмотр истории диалогов студентов
+- Аналитика и метрики системы
+- Профиль и настройки
 
 ## Технологии
 
@@ -29,42 +33,34 @@
 - Sentence Transformers
 - FAISS
 - NetworkX
+- Python 3.12
 
-## Установка
+## Быстрый старт
 
-### Backend
+### Запуск через Docker Compose
 
-Требуется Python 3.11 или 3.12 (не рекомендуется Python 3.14 из-за несовместимости библиотеки `gigachat`)
-
-1. Проверьте версию Python:
 ```bash
-python --version
+sudo docker compose -f docker-compose.dev.yml up --build
 ```
 
-2. Перейдите в директорию backend:
+- Backend: http://localhost:8000
+- Frontend: http://localhost:3000
+- API Docs: http://localhost:8000/docs
+
+### Локальная установка
+
+#### Backend
+
+1. Python 3.11 или 3.12 (не рекомендуется 3.14)
+2. Создайте виртуальное окружение:
 ```bash
 cd backend
-```
-
-3. Создайте виртуальное окружение:
-```bash
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# или
-venv\Scripts\activate  # Windows
-```
-
-4. Установите зависимости:
-```bash
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. Создайте файл `.env`:
-```bash
-cp .env.example .env
-```
-
-5. Настройте переменные окружения в `.env`:
+3. Создайте `.env`:
 ```env
 GIGACHAT_CREDENTIALS=your_credentials_here
 DATABASE_URL=sqlite:///./exam_system.db
@@ -73,157 +69,119 @@ DEBUG=True
 CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
-6. Запустите сервер:
+4. Запустите:
 ```bash
 python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend будет доступен на `http://localhost:8000`
-API документация: `http://localhost:8000/docs`
+#### Frontend
 
-### Frontend
-
-1. Установите зависимости:
 ```bash
 npm install
-```
-
-2. Создайте файл `.env` в корне проекта:
-```env
-VITE_API_BASE_URL=http://localhost:8000/api
-```
-
-3. Запустите dev-сервер:
-```bash
 npm run dev
 ```
 
-Приложение будет доступно по адресу `http://localhost:3000` или `http://localhost:5173`
+## Архитектура
+
+Мульти-агентная система с оркестратором:
+
+- **Core Orchestrator** - управление workflow между агентами
+- **Knowledge Agent** - работа с базой знаний, семантический поиск
+- **Dialogue Agent** - ведение диалога, уточняющие вопросы
+- **Critic Agent** - оценка ответов, анализ рассуждений
+- **Planning Agent** - адаптивный выбор вопросов
+- **Analytics Agent** - сбор метрик и аналитика
+
+## API Endpoints
+
+### Оркестратор (`/api/orchestrator`)
+- `POST /sessions` - Создание сессии
+- `GET /sessions/{id}` - Получение сессии
+- `POST /sessions/{id}/answer` - Отправка ответа
+- `POST /sessions/{id}/next-question` - Следующий вопрос
+- `POST /sessions/{id}/insights` - Инсайты
+- `GET /sessions/{id}/dialogue` - История диалога
+
+### Экзамены (`/api/exams`)
+- `GET /` - Список экзаменов
+- `GET /{exam_id}` - Получить экзамен
+- `POST /create-from-materials` - Создать из текста
+- `POST /create-from-pdf` - Создать из PDF
+
+### База знаний (`/api/knowledge-base`)
+- `GET /items` - Все элементы
+- `POST /items` - Создать элемент
+- `POST /extract-from-text` - Извлечь из текста
+- `POST /extract-from-pdf` - Извлечь из PDF
+- `POST /units/{unit_id}/generate-questions` - Генерация вопросов
+
+### Метрики
+- `GET /api/metrics` - Метрики системы
+
+## Создание экзаменов
+
+### Через интерфейс
+
+1. Перейдите в "База знаний" (преподаватель)
+2. Нажмите "Создать экзамен из материалов"
+3. Выберите способ: текст или PDF
+4. Заполните параметры и создайте экзамен
+
+### Через API
+
+```bash
+POST /api/exams/create-from-materials
+{
+  "name": "Экзамен по Python",
+  "text": "Текст материала...",
+  "num_questions": 10,
+  "adaptive": true
+}
+```
+
+## Workflow диалогового режима
+
+1. Студент выбирает экзамен → `/exam/{examId}`
+2. Система загружает экзамен и создает сессию
+3. Студент отвечает на вопросы
+4. Critic Agent оценивает ответ
+5. При неверном ответе → Dialogue Agent генерирует уточняющий вопрос
+6. Студент может ответить снова
+7. После правильного ответа → переход к следующему вопросу
 
 ## Структура проекта
 
 ```
 .
-├── backend/              # FastAPI backend
-│   ├── main.py          # Точка входа
-│   ├── config.py        # Конфигурация
-│   ├── models/          # Модели данных
-│   ├── schemas/         # API схемы
-│   ├── services/        # Бизнес-логика
-│   └── routers/         # API роутеры
-├── src/                 # React frontend
-│   ├── components/      # React компоненты
-│   ├── pages/           # Страницы
-│   ├── context/         # React Context
-│   └── services/        # API сервисы
+├── backend/
+│   ├── main.py
+│   ├── config.py
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   │   ├── orchestrator.py
+│   │   ├── agents/
+│   │   ├── knowledge_service.py
+│   │   └── exam_service.py
+│   ├── routers/
+│   └── middleware/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   ├── context/
+│   └── services/
 └── README.md
 ```
 
-## API Endpoints
-
-### База знаний
-- `GET /api/knowledge-base/items` - Получить все элементы
-- `POST /api/knowledge-base/items` - Создать элемент
-- `PUT /api/knowledge-base/items/{id}` - Обновить элемент
-- `DELETE /api/knowledge-base/items/{id}` - Удалить элемент
-- `POST /api/knowledge-base/extract-from-text` - Извлечь из текста
-- `POST /api/knowledge-base/extract-from-pdf` - Извлечь из PDF
-
-### Чат
-- `GET /api/chat` - Список чатов
-- `POST /api/chat` - Создать чат
-- `GET /api/chat/{id}` - Получить чат
-- `POST /api/chat/{id}/message` - Отправить сообщение
-
-### Экзамены
-- `GET /api/exams` - Список экзаменов
-- `POST /api/exams` - Создать экзамен
-- `GET /api/exams/current` - Текущий экзамен
-- `POST /api/exams/{id}/submit` - Отправить ответы
-
-### Студенты
-- `GET /api/students` - Список студентов
-- `POST /api/students` - Создать профиль
-- `GET /api/students/{id}` - Профиль студента
-- `POST /api/students/{id}/emotional-state` - Оценить состояние
-- `POST /api/students/{id}/diagnostic` - Диагностика
-
 ## Особенности
 
-- Система ролей - разделение интерфейса для студентов и преподавателей
-- Виртуальный экзаменатор - интерактивное общение для проверки знаний
-- База знаний - управление учебными материалами (только для преподавателей)
-- Интеграция с GigaChat - генерация вопросов и ответов с помощью LLM
-- Извлечение знаний из PDF - автоматическое создание дидактических единиц
-- Анализ эмоционального состояния - оценка психологического настроя студентов
-- Адаптивные экзамены - персонализированные тесты
-- CORS поддержка - готово для работы с фронтендом
-
-## Использование
-
-1. Запустите backend сервер (порт 8000)
-2. Запустите frontend приложение (порт 3000/5173)
-3. При первом запуске выберите роль (Студент или Преподаватель)
-4. Студенты могут начинать новые экзамены и общаться с виртуальным экзаменатором
-5. Преподаватели могут управлять базой знаний и просматривать историю диалогов студентов
-
-## Разработка
-
-### Локальная разработка
-
-Для разработки рекомендуется запускать оба сервера одновременно:
-
-```bash
-# Терминал 1 - Backend
-cd backend
-python -m uvicorn backend.main:app --reload
-
-# Терминал 2 - Frontend
-npm run dev
-```
-
-### Docker
-
-#### Production сборка
-
-1. Создайте файл `.env` на основе `.env.example`:
-```bash
-cp .env.example .env
-```
-
-2. Настройте переменные окружения в `.env`
-
-3. Запустите с Docker Compose:
-```bash
-docker-compose up -d
-```
-
-Приложение будет доступно:
-- Frontend: http://localhost
-- Backend API: http://localhost:8000
-- API документация: http://localhost:8000/docs
-
-#### Development режим
-
-Для разработки с hot-reload:
-
-```bash
-docker-compose -f docker-compose.dev.yml up
-```
-
-- Frontend: http://localhost:3000 (с hot-reload)
-- Backend API: http://localhost:8000 (с auto-reload)
-
-#### Остановка
-
-```bash
-docker-compose down
-```
-
-Для удаления volumes (данные БД):
-```bash
-docker-compose down -v
-```
+- Мульти-агентная архитектура
+- Адаптивные экзамены
+- Диалоговый режим с уточняющими вопросами
+- Семантический поиск через FAISS
+- Генерация вопросов через LLM
+- Аналитика и метрики
+- Извлечение знаний из PDF
 
 ## Лицензия
 

@@ -79,7 +79,7 @@ export const ChatProvider = ({ children }) => {
     return chats.find(chat => chat.id === chatId)
   }
 
-  // База знаний (только для преподавателей)
+
   const addKnowledgeItem = (item) => {
     const newItem = {
       id: Date.now().toString(),

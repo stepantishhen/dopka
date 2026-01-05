@@ -7,6 +7,7 @@ from backend.schemas.knowledge_base import (
     KnowledgeItemCreate, KnowledgeItemResponse, KnowledgeItemUpdate,
     DidacticUnitCreate, DidacticUnitResponse
 )
+from pydantic import BaseModel
 from backend.services.knowledge_service import KnowledgeService
 
 
@@ -126,13 +127,17 @@ async def delete_knowledge_item(
     return {"message": "Элемент удален"}
 
 
+class TextExtractRequest(BaseModel):
+    text: str
+
+
 @router.post("/extract-from-text")
 async def extract_from_text(
-    text: str,
+    request_data: TextExtractRequest,
     request: Request = None,
     service: KnowledgeService = Depends(get_knowledge_service)
 ):
-    units = service.extract_knowledge_from_text(text)
+    units = service.extract_knowledge_from_text(request_data.text)
     return {"units": [unit.model_dump() for unit in units], "count": len(units)}
 
 

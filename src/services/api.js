@@ -32,7 +32,7 @@ class ApiService {
     }
   }
 
-  // Knowledge Base API
+
   async getKnowledgeItems(search = null) {
     const params = search ? `?search=${encodeURIComponent(search)}` : ''
     return this.request(`/knowledge-base/items${params}`)
@@ -75,7 +75,7 @@ class ApiService {
     })
   }
 
-  // Chat API
+
   async createChat(title = null) {
     return this.request('/chat', {
       method: 'POST',
@@ -98,7 +98,11 @@ class ApiService {
     return this.request('/chat')
   }
 
-  // Exams API
+  async listExams() {
+    return this.request('/exams')
+  }
+
+
   async createExam(examData) {
     return this.request('/exams', {
       method: 'POST',
@@ -127,7 +131,7 @@ class ApiService {
     })
   }
 
-  // Students API
+
   async createStudent(name, group = null) {
     return this.request('/students', {
       method: 'POST',
@@ -150,6 +154,90 @@ class ApiService {
     return this.request(`/students/${studentId}/diagnostic`, {
       method: 'POST',
       body: { student_id: studentId, quick_mode: quickMode },
+    })
+  }
+
+
+  async createSession(studentId, examId = null) {
+    return this.request('/orchestrator/sessions', {
+      method: 'POST',
+      body: { student_id: studentId, exam_id: examId },
+    })
+  }
+
+  async getSession(sessionId) {
+    return this.request(`/orchestrator/sessions/${sessionId}`)
+  }
+
+  async submitAnswer(sessionId, questionId, answer, questionData) {
+    return this.request(`/orchestrator/sessions/${sessionId}/answer`, {
+      method: 'POST',
+      body: {
+        session_id: sessionId,
+        question_id: questionId,
+        answer: answer,
+        question_data: questionData,
+      },
+    })
+  }
+
+  async getNextQuestion(sessionId, examConfig) {
+    return this.request(`/orchestrator/sessions/${sessionId}/next-question`, {
+      method: 'POST',
+      body: {
+        session_id: sessionId,
+        exam_config: examConfig,
+      },
+    })
+  }
+
+  async getInsights(sessionId, studentId) {
+    return this.request(`/orchestrator/sessions/${sessionId}/insights`, {
+      method: 'POST',
+      body: {
+        session_id: sessionId,
+        student_id: studentId,
+      },
+    })
+  }
+
+  async getDialogueHistory(sessionId) {
+    return this.request(`/orchestrator/sessions/${sessionId}/dialogue`)
+  }
+
+  async getMetrics() {
+    return this.request('/metrics')
+  }
+
+
+  async createExamFromMaterials(name, text, unitIds = null, numQuestions = 10, adaptive = true) {
+    return this.request('/exams/create-from-materials', {
+      method: 'POST',
+      body: {
+        name,
+        text,
+        unit_ids: unitIds,
+        num_questions: numQuestions,
+        adaptive,
+        questions_per_unit: 3,
+      },
+    })
+  }
+
+  async createExamFromPDF(file, name = null, numQuestions = 10, adaptive = true) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (name) {
+      formData.append('name', name)
+    }
+    formData.append('num_questions', numQuestions.toString())
+    formData.append('adaptive', adaptive.toString())
+    formData.append('questions_per_unit', '3')
+
+    return this.request('/exams/create-from-pdf', {
+      method: 'POST',
+      headers: {},
+      body: formData,
     })
   }
 }
