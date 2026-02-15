@@ -1,18 +1,66 @@
 import json
+import logging
+import random
+import re
 from typing import Dict, List, Optional
 from datetime import datetime
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
-import re
 
 from backend.models.exam_system import Exam, ExamConfig, StudentAnswer, StudentProfile, EmotionalState
-from backend.config import settings
 from backend.services.knowledge_service import KnowledgeService
+from backend.services.llm_client import LLMClient
+
+logger = logging.getLogger("exam_system.exam_service")
+
+TEST_EXAM_ID = "exam_test"
+TEST_JOIN_CODE = "TEST01"
+
+TEST_EXAM_QUESTIONS = [
+    {
+        "question_id": "q_test_1",
+        "question": "Что такое переменная в программировании?",
+        "type": "understanding",
+        "difficulty": 0.3,
+        "criteria": [{"name": "Определение", "max_score": 5}, {"name": "Пример", "max_score": 5}],
+        "reference_answer": "Переменная - именованная область памяти, хранящая значение.",
+    },
+    {
+        "question_id": "q_test_2",
+        "question": "Опишите разницу между list и tuple в Python.",
+        "type": "understanding",
+        "difficulty": 0.5,
+        "criteria": [{"name": "Изменяемость", "max_score": 5}, {"name": "Синтаксис", "max_score": 5}],
+        "reference_answer": "List изменяемый, tuple неизменяемый. List использует [], tuple (.",
+    },
+    {
+        "question_id": "q_test_3",
+        "question": "Напишите цикл для вывода чисел от 1 до 10 в Python.",
+        "type": "application",
+        "difficulty": 0.4,
+        "criteria": [{"name": "Синтаксис цикла", "max_score": 5}, {"name": "Корректный вывод", "max_score": 5}],
+        "reference_answer": "for i in range(1, 11): print(i)",
+    },
+    {
+        "question_id": "q_test_4",
+        "question": "Объясните, что такое рекурсия и приведите пример.",
+        "type": "analysis",
+        "difficulty": 0.6,
+        "criteria": [{"name": "Определение", "max_score": 5}, {"name": "Базовый случай", "max_score": 5}],
+        "reference_answer": "Рекурсия - вызов функцией самой себя. Базовый случай обязателен.",
+    },
+    {
+        "question_id": "q_test_5",
+        "question": "Что выведет print(type([])) в Python?",
+        "type": "understanding",
+        "difficulty": 0.2,
+        "criteria": [{"name": "Правильный тип", "max_score": 10}],
+        "reference_answer": "<class 'list'>",
+    },
+]
 
 
 class ExamService:
     def __init__(self, knowledge_service: KnowledgeService):
-        self.giga = GigaChat(credentials=settings.gigachat_credentials, verify_ssl_certs=False)
+        self.llm = LLMClient()
         self.knowledge_service = knowledge_service
         self.exams: Dict[str, Exam] = {}
         self.current_exam: Optional[Exam] = None
@@ -54,35 +102,85 @@ class ExamService:
                 json_text = json_text.rsplit(']', 1)[0] + ']'
             return json.loads(json_text)
         except Exception as e:
-            print(f"JSON parsing error: {e}")
+            logger.debug("safe_parse_json error: %s", e)
             return None
-    
-    def create_exam(self, exam_config: ExamConfig) -> Exam:
+
+    def _generate_join_code(self) -> str:
+        import random
+        import string
+        chars = string.ascii_uppercase + string.digits
+        return "".join(random.choices(chars, k=6))
+
+    def create_exam(self, exam_config: ExamConfig, questions: Optional[List[Dict]] = None) -> Exam:
         exam_id = f"exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        questions = []
-        if exam_config.adaptive:
-            questions = self._generate_adaptive_questions(exam_config)
-        else:
-            questions = self._generate_fixed_questions(exam_config)
+        join_code = self._generate_join_code()
+        logger.debug("create_exam exam_id=%s name=%s questions_provided=%s", exam_id, exam_config.name, questions is not None)
+        if questions is None:
+            questions = []
+            if exam_config.adaptive:
+                questions = self._generate_adaptive_questions(exam_config)
+            else:
+                questions = self._generate_fixed_questions(exam_config)
         
         exam = Exam(
             exam_id=exam_id,
             config=exam_config,
             status="active",
             questions=questions,
-            link=f"/exam/{exam_id}"
+            link=f"/exam/{exam_id}",
+            join_code=join_code
         )
+        
+        while any(e.join_code == join_code for e in self.exams.values()):
+            join_code = self._generate_join_code()
+            exam.join_code = join_code
         
         self.exams[exam_id] = exam
         self.current_exam = exam
-        
+        logger.info("create_exam stored exam_id=%s join_code=%s questions=%s", exam_id, exam.join_code, len(exam.questions))
         return exam
+
+    def get_exam_by_join_code(self, join_code: str) -> Optional[Exam]:
+        for exam in self.exams.values():
+            if exam.join_code and exam.join_code.upper() == join_code.upper():
+                return exam
+        return None
+
+    def get_or_create_test_exam(self) -> Exam:
+        existing = self.exams.get(TEST_EXAM_ID)
+        if existing:
+            return existing
+        config = ExamConfig(
+            name="Тестовый экзамен (5 вопросов)",
+            adaptive=False,
+            num_questions=5,
+            unit_ids=None,
+        )
+        exam = Exam(
+            exam_id=TEST_EXAM_ID,
+            config=config,
+            status="active",
+            questions=list(TEST_EXAM_QUESTIONS),
+            link=f"/exam/{TEST_EXAM_ID}",
+            join_code=TEST_JOIN_CODE,
+        )
+        self.exams[TEST_EXAM_ID] = exam
+        logger.info("get_or_create_test_exam created exam_id=%s join_code=%s questions=5", TEST_EXAM_ID, TEST_JOIN_CODE)
+        return exam
+
+    def create_sample_exam(self) -> Exam:
+        config = ExamConfig(
+            name="Тестовый экзамен (без LLM)",
+            adaptive=False,
+            num_questions=5,
+            unit_ids=None,
+        )
+        return self.create_exam(config, questions=list(TEST_EXAM_QUESTIONS))
     
     def _generate_adaptive_questions(self, config: ExamConfig) -> List[Dict]:
         questions = []
         unit_ids = config.unit_ids or list(self.knowledge_service.knowledge_base.keys())
-        
+        random.shuffle(unit_ids)
         for unit_id in unit_ids[:config.num_questions]:
             unit = self.knowledge_service.get_unit(unit_id)
             if unit and unit.questions.get("understanding"):
@@ -100,7 +198,7 @@ class ExamService:
     def _generate_fixed_questions(self, config: ExamConfig) -> List[Dict]:
         questions = []
         unit_ids = config.unit_ids or list(self.knowledge_service.knowledge_base.keys())
-        
+        random.shuffle(unit_ids)
         for unit_id in unit_ids:
             if len(questions) >= config.num_questions:
                 break
@@ -189,12 +287,10 @@ class ExamService:
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=1000)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=1000)
             
             data = self.safe_parse_json(response_text)
             if data:

@@ -1,3 +1,6 @@
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,14 +11,26 @@ from backend.services.chat_service import ChatService
 from backend.services.orchestrator import CoreOrchestrator
 from backend.services.logging_service import logging_service
 from backend.middleware import LoggingMiddleware
-from backend.routers import knowledge_base, exams, students, chat
+from backend.database import init_db
+from backend.routers import knowledge_base, exams, students, chat, auth, teacher
 from backend.routers import orchestrator as orchestrator_router
+
+os.environ.setdefault("TZ", "Europe/Moscow")
+logger = logging.getLogger("exam_system")
 
 app = FastAPI(
     title="Система обучения с виртуальным экзаменатором",
     description="API для системы обучения студентов и преподавателей",
     version="1.0.0"
 )
+
+
+@app.on_event("startup")
+def on_startup():
+    logger.info("startup: initializing database")
+    init_db()
+    exam_service.get_or_create_test_exam()
+    logger.info("startup: ready timezone=%s test_exam_id=exam_test", os.environ.get("TZ", "not set"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,11 +51,13 @@ app.state.exam_service = exam_service
 app.state.chat_service = chat_service
 app.state.orchestrator = orchestrator
 
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(knowledge_base.router, prefix="/api/knowledge-base", tags=["knowledge-base"])
 app.include_router(exams.router, prefix="/api/exams", tags=["exams"])
 app.include_router(students.router, prefix="/api/students", tags=["students"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(orchestrator_router.router, prefix="/api/orchestrator", tags=["orchestrator"])
+app.include_router(teacher.router, prefix="/api/teacher", tags=["teacher"])
 
 
 @app.get("/")
@@ -50,6 +67,7 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
+    logger.debug("health_check")
     return {"status": "ok"}
 
 

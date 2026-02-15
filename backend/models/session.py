@@ -18,6 +18,7 @@ class AgentType(str, Enum):
     CRITIC = "critic"
     PLANNING = "planning"
     ANALYTICS = "analytics"
+    ADAPTIVE_EXAM = "adaptive_exam"
 
 
 class DialogueTactic(str, Enum):
@@ -38,8 +39,10 @@ class SessionState(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     dialogue_history: List[Dict[str, Any]] = Field(default_factory=list)
     answered_questions: List[str] = Field(default_factory=list)
+    question_order: Optional[List[str]] = None
     knowledge_gaps: List[str] = Field(default_factory=list)
     current_tactic: Optional[DialogueTactic] = None
+    current_simplification_level: int = 0
 
 
 class AgentRequest(BaseModel):

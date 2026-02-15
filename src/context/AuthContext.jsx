@@ -15,28 +15,40 @@ export const AuthProvider = ({ children }) => {
     const saved = localStorage.getItem('user')
     return saved ? JSON.parse(saved) : null
   })
+  const [token, setToken] = useState(() => localStorage.getItem('token') || null)
 
   useEffect(() => {
-    if (user) {
+    if (user && token) {
       localStorage.setItem('user', JSON.stringify(user))
+      localStorage.setItem('token', token)
     } else {
       localStorage.removeItem('user')
+      localStorage.removeItem('token')
     }
-  }, [user])
+  }, [user, token])
 
   const login = (role, name = '') => {
     const newUser = {
       id: Date.now().toString(),
-      role, 
+      role,
       name: name || (role === 'student' ? 'Студент' : 'Преподаватель'),
       loginTime: new Date().toISOString()
     }
     setUser(newUser)
+    setToken(null)
     return newUser
+  }
+
+  const loginWithCredentials = (authResponse) => {
+    const { user: userData, access_token } = authResponse
+    setUser(userData)
+    setToken(access_token)
+    return userData
   }
 
   const logout = () => {
     setUser(null)
+    setToken(null)
   }
 
   const isStudent = () => user?.role === 'student'
@@ -44,7 +56,9 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
+    token,
     login,
+    loginWithCredentials,
     logout,
     isStudent,
     isTeacher
@@ -52,4 +66,3 @@ export const AuthProvider = ({ children }) => {
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
-

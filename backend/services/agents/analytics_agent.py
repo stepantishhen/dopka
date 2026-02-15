@@ -1,18 +1,16 @@
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
-from backend.services.agents.base_agent import BaseAgent
-from backend.models.session import AgentRequest, AgentResponse, AgentType
-from backend.config import settings
 import json
 import re
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+from backend.services.agents.base_agent import BaseAgent
+from backend.models.session import AgentRequest, AgentResponse, AgentType
+from backend.services.llm_client import LLMClient
 
 
 class AnalyticsAgent(BaseAgent):
     def __init__(self):
         super().__init__(AgentType.ANALYTICS)
-        self.giga = GigaChat(credentials=settings.gigachat_credentials, verify_ssl_certs=False)
+        self.llm = LLMClient()
         self.metrics_store: Dict[str, List[Dict[str, Any]]] = {}
     
     def _safe_parse_json(self, text: str) -> Dict[str, Any]:
@@ -149,12 +147,10 @@ class AnalyticsAgent(BaseAgent):
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.5, max_tokens=800)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.5, max_tokens=800)
             
             result = self._safe_parse_json(response_text)
             if result:
@@ -189,12 +185,10 @@ class AnalyticsAgent(BaseAgent):
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.5, max_tokens=800)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.5, max_tokens=800)
             
             result = self._safe_parse_json(response_text)
             if result:

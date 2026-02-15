@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class SessionCreate(BaseModel):
@@ -15,13 +15,36 @@ class SessionResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    total_score: Optional[float] = None
+    max_total_score: Optional[float] = None
+    questions_answered: Optional[int] = None
+    passed: Optional[bool] = None
+
+
+class SessionCompleteResponse(BaseModel):
+    session_id: str
+    status: str
+    total_score: float
+    max_total_score: float
+    questions_answered: int
+    passed: bool
 
 
 class AnswerSubmission(BaseModel):
     session_id: str
     question_id: str
-    answer: str
-    question_data: Dict[str, Any]
+    answer: str = ""
+    question_data: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("question_id", mode="before")
+    @classmethod
+    def question_id_str(cls, v):
+        return str(v) if v is not None else ""
+
+    @field_validator("question_data", mode="before")
+    @classmethod
+    def question_data_dict(cls, v):
+        return v if isinstance(v, dict) else {}
 
 
 class AnswerResponse(BaseModel):

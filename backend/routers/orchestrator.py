@@ -1,13 +1,15 @@
+import logging
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Dict, Any
 
 from backend.schemas.orchestrator import (
-    SessionCreate, SessionResponse, AnswerSubmission,
-    AnswerResponse, NextQuestionRequest, InsightsRequest, InsightsResponse
+    SessionCreate, SessionResponse, SessionCompleteResponse,
+    AnswerSubmission, AnswerResponse, NextQuestionRequest, InsightsRequest, InsightsResponse
 )
 from backend.services.orchestrator import CoreOrchestrator
 
-
+logger = logging.getLogger("exam_system.orchestrator")
 router = APIRouter()
 
 
@@ -18,20 +20,35 @@ def get_orchestrator(request: Request) -> CoreOrchestrator:
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(
     session_data: SessionCreate,
-    request: Request = None,
+    request: Request,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.info("create_session student_id=%s exam_id=%s", session_data.student_id, session_data.exam_id)
     session = orchestrator.create_session(
         student_id=session_data.student_id,
         exam_id=session_data.exam_id
     )
-    
+    if session_data.exam_id:
+        exam_service = getattr(request.app.state, "exam_service", None)
+        if exam_service:
+            exam = exam_service.get_exam(session_data.exam_id)
+            if exam and getattr(exam, "questions", None):
+                first_q = exam.questions[0]
+                session.dialogue_history.append({
+                    "sender": "ai",
+                    "text": first_q.get("question", ""),
+                    "type": "question",
+                    "question_id": first_q.get("question_id"),
+                    "timestamp": datetime.now().isoformat(),
+                })
+                logger.info("create_session added first question to dialogue exam_id=%s", session_data.exam_id)
+    logger.info("create_session success session_id=%s", session.session_id)
     return SessionResponse(
         session_id=session.session_id,
         student_id=session.student_id,
         exam_id=session.exam_id,
         current_question_id=session.current_question_id,
-        status="active",
+        status=session.status.value if hasattr(session.status, "value") else "active",
         created_at=session.created_at,
         updated_at=session.updated_at
     )
@@ -44,23 +61,58 @@ async def submit_answer(
     request: Request = None,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.info("submit_answer session_id=%s question_id=%s answer_len=%s",
+                session_id, submission.question_id, len(submission.answer or ""))
     if submission.session_id != session_id:
+        logger.warning("submit_answer session_id mismatch")
         raise HTTPException(status_code=400, detail="Session ID mismatch")
-    
+    question_data = dict(submission.question_data or {})
+    session = orchestrator.get_session(session_id)
+    total_so_far, _ = orchestrator._session_scores(session) if session else (0, 0)
+    remaining = max(0, 100 - (total_so_far or 0))
+    if session and session.exam_id:
+        exam_service = getattr(request.app.state, "exam_service", None)
+        if exam_service:
+            exam = exam_service.get_exam(session.exam_id)
+            if exam and getattr(exam, "questions", None):
+                M = len(exam.questions)
+                question_data["total_questions"] = M
+                question_data["question_number"] = len(session.answered_questions) + 1
+                question_data["max_score_for_this_question"] = min(100.0 / M, remaining) if M else remaining
+    if "max_score_for_this_question" not in question_data:
+        question_data["max_score_for_this_question"] = remaining if remaining > 0 else 100.0
     try:
         result = await orchestrator.process_student_answer(
             session_id=session_id,
             question_id=submission.question_id,
             answer=submission.answer,
-            question_data=submission.question_data
+            question_data=question_data
         )
-        
+        logger.info("submit_answer success session_id=%s is_correct=%s", session_id, result.get("is_correct"))
         return AnswerResponse(**result)
-    
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        msg = str(e)
+        if "завершён" in msg or "completed" in msg.lower():
+            raise HTTPException(status_code=403, detail=msg)
+        logger.warning("submit_answer ValueError session_id=%s: %s", session_id, e)
+        raise HTTPException(status_code=404, detail=msg)
     except Exception as e:
+        logger.exception("submit_answer error session_id=%s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/sessions/{session_id}/complete", response_model=SessionCompleteResponse)
+async def complete_session(
+    session_id: str,
+    request: Request = None,
+    orchestrator: CoreOrchestrator = Depends(get_orchestrator)
+):
+    try:
+        result = orchestrator.complete_session(session_id)
+        return SessionCompleteResponse(**result)
+    except ValueError as e:
+        logger.warning("complete_session ValueError session_id=%s: %s", session_id, e)
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -69,18 +121,27 @@ async def get_session(
     request: Request = None,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.debug("get_session session_id=%s", session_id)
     session = orchestrator.get_session(session_id)
     if not session:
+        logger.warning("get_session not found session_id=%s", session_id)
         raise HTTPException(status_code=404, detail="Session not found")
-    
+    status_str = session.status.value if hasattr(session.status, "value") else str(session.status)
+    total_score, max_total = None, None
+    if status_str == "completed":
+        total_score, max_total = orchestrator._session_scores(session)
     return SessionResponse(
         session_id=session.session_id,
         student_id=session.student_id,
         exam_id=session.exam_id,
         current_question_id=session.current_question_id,
-        status="active",
+        status=status_str,
         created_at=session.created_at,
-        updated_at=session.updated_at
+        updated_at=session.updated_at,
+        total_score=total_score,
+        max_total_score=max_total,
+        questions_answered=len(session.answered_questions) if status_str == "completed" else None,
+        passed=(min(100, total_score or 0) >= 56) if (total_score is not None) else None,
     )
 
 
@@ -88,20 +149,27 @@ async def get_session(
 async def get_next_question(
     session_id: str,
     request_data: NextQuestionRequest,
-    request: Request = None,
+    request: Request,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.info("get_next_question session_id=%s", session_id)
+    exam_service = getattr(request.app.state, "exam_service", None)
     try:
         question = await orchestrator.get_next_question(
             session_id=session_id,
-            exam_config=request_data.exam_config
+            exam_config=request_data.exam_config,
+            exam_service=exam_service,
         )
-        
+        logger.info("get_next_question success session_id=%s has_question=%s", session_id, question is not None)
         return {"question": question}
-    
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        msg = str(e)
+        if "завершён" in msg or "completed" in msg.lower():
+            raise HTTPException(status_code=403, detail=msg)
+        logger.warning("get_next_question ValueError session_id=%s: %s", session_id, e)
+        raise HTTPException(status_code=404, detail=msg)
     except Exception as e:
+        logger.exception("get_next_question error session_id=%s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -111,8 +179,10 @@ async def get_dialogue(
     request: Request = None,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.debug("get_dialogue session_id=%s", session_id)
     session = orchestrator.get_session(session_id)
     if not session:
+        logger.warning("get_dialogue not found session_id=%s", session_id)
         raise HTTPException(status_code=404, detail="Session not found")
     
     return {
@@ -129,16 +199,18 @@ async def get_insights(
     request: Request = None,
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
+    logger.info("get_insights session_id=%s student_id=%s", session_id, request_data.student_id)
     try:
         insights = await orchestrator.generate_insights(
             session_id=session_id,
             student_id=request_data.student_id
         )
-        
+        logger.info("get_insights success session_id=%s", session_id)
         return InsightsResponse(**insights)
-    
     except ValueError as e:
+        logger.warning("get_insights ValueError session_id=%s: %s", session_id, e)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception("get_insights error session_id=%s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 

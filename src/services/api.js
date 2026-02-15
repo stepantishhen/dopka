@@ -1,5 +1,10 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
 
+function getAuthHeaders() {
+  const token = localStorage.getItem('token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 class ApiService {
   constructor() {
     this.baseURL = API_BASE_URL
@@ -10,6 +15,7 @@ class ApiService {
     const config = {
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeaders(),
         ...options.headers,
       },
       ...options,
@@ -169,6 +175,12 @@ class ApiService {
     return this.request(`/orchestrator/sessions/${sessionId}`)
   }
 
+  async completeSession(sessionId) {
+    return this.request(`/orchestrator/sessions/${sessionId}/complete`, {
+      method: 'POST',
+    })
+  }
+
   async submitAnswer(sessionId, questionId, answer, questionData) {
     return this.request(`/orchestrator/sessions/${sessionId}/answer`, {
       method: 'POST',
@@ -209,6 +221,38 @@ class ApiService {
     return this.request('/metrics')
   }
 
+  async getTeacherStudents() {
+    return this.request('/teacher/students')
+  }
+
+  async getStudentAnalytics(studentId) {
+    return this.request(`/teacher/students/${encodeURIComponent(studentId)}/analytics`)
+  }
+
+
+  async register(email, password, name, role = 'student') {
+    return this.request('/auth/register', {
+      method: 'POST',
+      body: { email, password, name, role },
+    })
+  }
+
+  async login(email, password) {
+    return this.request('/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+  }
+
+  async getExamByJoinCode(joinCode) {
+    return this.request(`/exams/join/${encodeURIComponent(joinCode)}`)
+  }
+
+  async createSampleExam() {
+    return this.request('/exams/create-sample', {
+      method: 'POST',
+    })
+  }
 
   async createExamFromMaterials(name, text, unitIds = null, numQuestions = 10, adaptive = true) {
     return this.request('/exams/create-from-materials', {

@@ -364,7 +364,6 @@ const KnowledgeBase = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Модальное окно создания экзамена */}
       <Modal show={showCreateExamModal} onHide={() => setShowCreateExamModal(false)} size="lg">
         <Modal.Header closeButton>
           <Modal.Title>Создать экзамен из материалов</Modal.Title>

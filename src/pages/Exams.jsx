@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Container, Card, Button, Table, Badge, Alert, Spinner } from 'react-bootstrap'
+import { Container, Card, Button, Table, Badge, Alert, Spinner, InputGroup, Form, OverlayTrigger, Tooltip } from 'react-bootstrap'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 
@@ -8,6 +8,8 @@ const Exams = () => {
   const [exams, setExams] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [creatingSample, setCreatingSample] = useState(false)
+  const [copiedCode, setCopiedCode] = useState(null)
 
   useEffect(() => {
     loadExams()
@@ -24,6 +26,27 @@ const Exams = () => {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleCreateSample = async () => {
+    setCreatingSample(true)
+    try {
+      const exam = await api.createSampleExam()
+      setExams(prev => [exam, ...prev])
+      navigate(`/exam/${exam.exam_id}`)
+    } catch (err) {
+      setError(err.message || 'Ошибка создания тестового экзамена')
+    } finally {
+      setCreatingSample(false)
+    }
+  }
+
+  const copyJoinLink = (code) => {
+    const url = `${window.location.origin}/join/${code}`
+    navigator.clipboard?.writeText(url).then(() => {
+      setCopiedCode(code)
+      setTimeout(() => setCopiedCode(null), 2000)
+    }).catch(() => {})
   }
 
   const handleViewExam = (examId) => {
@@ -55,11 +78,20 @@ const Exams = () => {
 
   return (
     <Container className="py-4">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h2>Экзамены</h2>
-        <Button variant="primary" onClick={() => navigate('/knowledge-base')}>
-          Создать экзамен из материалов
-        </Button>
+      <div className="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
+        <h2 className="mb-0">Экзамены</h2>
+        <div className="d-flex gap-2">
+          <Button
+            variant="outline-success"
+            onClick={handleCreateSample}
+            disabled={creatingSample}
+          >
+            {creatingSample ? <Spinner animation="border" size="sm" /> : null} Тестовый экзамен
+          </Button>
+          <Button variant="primary" onClick={() => navigate('/knowledge-base')}>
+            Создать из материалов
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -80,6 +112,7 @@ const Exams = () => {
                 <tr>
                   <th>Название</th>
                   <th>Статус</th>
+                  <th>Код</th>
                   <th>Вопросов</th>
                   <th>Адаптивный</th>
                   <th>Создан</th>
@@ -96,6 +129,29 @@ const Exams = () => {
                       <Badge bg={exam.status === 'active' ? 'success' : 'secondary'}>
                         {exam.status}
                       </Badge>
+                    </td>
+                    <td>
+                      {exam.join_code ? (
+                        <InputGroup size="sm" style={{ maxWidth: 150 }}>
+                          <Form.Control
+                            readOnly
+                            value={exam.join_code}
+                            className="text-uppercase"
+                          />
+                          <OverlayTrigger
+                            placement="top"
+                            overlay={<Tooltip>{copiedCode === exam.join_code ? 'Скопировано!' : 'Скопировать ссылку'}</Tooltip>}
+                          >
+                            <Button
+                              variant="outline-secondary"
+                              size="sm"
+                              onClick={() => copyJoinLink(exam.join_code)}
+                            >
+                              📋
+                            </Button>
+                          </OverlayTrigger>
+                        </InputGroup>
+                      ) : '-'}
                     </td>
                     <td>{exam.questions?.length || 0}</td>
                     <td>

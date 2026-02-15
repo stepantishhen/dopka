@@ -20,6 +20,7 @@ class Exam(BaseModel):
     questions: List[Dict] = []
     results: Dict = Field(default_factory=dict)
     link: str = ""
+    join_code: str = ""
 
 
 class StudentAnswer(BaseModel):

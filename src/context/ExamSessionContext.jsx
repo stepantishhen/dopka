@@ -44,6 +44,7 @@ export const ExamSessionProvider = ({ children }) => {
       setError(null)
       const response = await api.getNextQuestion(currentSession.session_id, examConfig)
       setCurrentQuestion(response.question)
+      await loadDialogueHistory()
       return response.question
     } catch (err) {
       setError(err.message)
@@ -132,6 +133,22 @@ export const ExamSessionProvider = ({ children }) => {
     }
   }
 
+  const completeSession = async () => {
+    if (!currentSession) throw new Error('No active session')
+    const result = await api.completeSession(currentSession.session_id)
+    setCurrentSession((prev) => (prev ? { ...prev, status: 'completed' } : null))
+    return result
+  }
+
+  const fetchSessionStatus = async () => {
+    if (!currentSession) return null
+    try {
+      return await api.getSession(currentSession.session_id)
+    } catch (err) {
+      return null
+    }
+  }
+
   const loadInsights = async () => {
     if (!currentSession) return
 
@@ -177,6 +194,8 @@ export const ExamSessionProvider = ({ children }) => {
     submitAnswer,
     loadDialogueHistory,
     loadInsights,
+    completeSession,
+    fetchSessionStatus,
     endSession,
   }
 

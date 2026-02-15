@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import List
 
@@ -7,7 +8,7 @@ from backend.schemas.students import (
 )
 from backend.services.exam_service import ExamService
 
-
+logger = logging.getLogger("exam_system.students")
 router = APIRouter()
 
 
@@ -22,10 +23,10 @@ async def create_student(
     service: ExamService = Depends(get_exam_service)
 ):
     from datetime import datetime
-    
+    logger.info("create_student name=%s group=%s", student_data.name, student_data.group)
     student_id = f"{student_data.name}_{student_data.group or 'default'}_{datetime.now().timestamp()}"
     profile = service.get_or_create_student(student_id, student_data.name, student_data.group or "")
-    
+    logger.info("create_student success student_id=%s", profile.student_id)
     return StudentResponse(
         student_id=profile.student_id,
         name=profile.name,
@@ -41,7 +42,9 @@ async def get_student_profile(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.debug("get_student_profile student_id=%s", student_id)
     if student_id not in service.student_profiles:
+        logger.warning("get_student_profile not found student_id=%s", student_id)
         raise HTTPException(status_code=404, detail="Студент не найден")
     
     profile = service.student_profiles[student_id]
@@ -76,7 +79,7 @@ async def diagnose_knowledge_gaps(
     service: ExamService = Depends(get_exam_service)
 ):
     from datetime import datetime
-    
+    logger.info("diagnose_knowledge_gaps student_id=%s", student_id)
     service.get_or_create_student(student_id)
     
     questions = []
@@ -92,7 +95,7 @@ async def diagnose_knowledge_gaps(
                 break
     
     diagnostic_id = f"diag_{student_id}_{datetime.now().strftime('%Y%m%d')}"
-    
+    logger.info("diagnose_knowledge_gaps success diagnostic_id=%s questions=%s", diagnostic_id, len(questions[:10]))
     return DiagnosticResponse(
         diagnostic_id=diagnostic_id,
         questions=questions[:10],
@@ -105,6 +108,7 @@ async def list_students(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.debug("list_students count=%s", len(service.student_profiles))
     students = [
         StudentResponse(
             student_id=profile.student_id,

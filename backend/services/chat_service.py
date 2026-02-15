@@ -1,14 +1,15 @@
+import logging
 from typing import Dict, List, Optional
 from datetime import datetime
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
 
-from backend.config import settings
+from backend.services.llm_client import LLMClient
+
+logger = logging.getLogger("exam_system.chat_service")
 
 
 class ChatService:
     def __init__(self):
-        self.giga = GigaChat(credentials=settings.gigachat_credentials, verify_ssl_certs=False)
+        self.llm = LLMClient()
         self.chats: Dict[str, Dict] = {}
     
     def generate_ai_response(self, user_message: str, context: Optional[List[Dict]] = None) -> str:
@@ -27,14 +28,15 @@ class ChatService:
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.7, max_tokens=500)
-            response = self.giga.chat(payload)
-            return response.choices[0].message.content
+            logger.debug("generate_ai_response message_len=%s context_messages=%s", len(user_message), len(context or []))
+            out = self.llm.chat(messages, temperature=0.7, max_tokens=500)
+            logger.debug("generate_ai_response response_len=%s", len(out))
+            return out
         except Exception as e:
-            print(f"Ошибка при генерации ответа: {e}")
+            logger.exception("generate_ai_response error: %s", e)
             return "Извините, произошла ошибка. Попробуйте еще раз."
     
     def create_chat(self, title: str = "Новый экзамен") -> str:

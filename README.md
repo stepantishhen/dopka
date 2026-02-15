@@ -29,7 +29,7 @@
 
 ### Backend:
 - FastAPI
-- GigaChat API
+- OpenAI-совместимый API (OpenAI, Claude, GigaChat и др.)
 - Sentence Transformers
 - FAISS
 - NetworkX
@@ -62,7 +62,14 @@ pip install -r requirements.txt
 
 3. Создайте `.env`:
 ```env
-GIGACHAT_CREDENTIALS=your_credentials_here
+# LLM — OpenAI-совместимый API (любой провайдер: OpenAI, Claude через прокси, GigaChat и т.д.)
+OPENAI_API_KEY=your_api_key
+OPENAI_BASE_URL=https://openai.api.proxyapi.ru/v1
+OPENAI_MODEL=anthropic/claude-sonnet-4-20250514
+
+# Устаревшее — можно использовать как fallback для OPENAI_API_KEY
+GIGACHAT_CREDENTIALS=
+
 DATABASE_URL=sqlite:///./exam_system.db
 SECRET_KEY=your-secret-key-here
 DEBUG=True
@@ -105,8 +112,14 @@ npm run dev
 ### Экзамены (`/api/exams`)
 - `GET /` - Список экзаменов
 - `GET /{exam_id}` - Получить экзамен
+- `GET /join/{join_code}` - Получить экзамен по коду присоединения
+- `POST /create-sample` - Создать тестовый экзамен (без LLM)
 - `POST /create-from-materials` - Создать из текста
 - `POST /create-from-pdf` - Создать из PDF
+
+### Аутентификация (`/api/auth`)
+- `POST /register` - Регистрация (email, password, name, role)
+- `POST /login` - Вход (email, password)
 
 ### База знаний (`/api/knowledge-base`)
 - `GET /items` - Все элементы

@@ -5,7 +5,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    gigachat_credentials: str
+    gigachat_credentials: str = ""
+    openai_api_key: str = ""
+    openai_base_url: str = ""
+    openai_model: str = "gpt-4o-mini"
     database_url: str = "sqlite:///./exam_system.db"
     secret_key: str = "dev-secret-key-change-in-production"
     debug: bool = True

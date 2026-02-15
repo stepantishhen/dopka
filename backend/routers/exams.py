@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from typing import List, Optional
 import pdfplumber
@@ -10,7 +11,7 @@ from backend.schemas.exams import (
 from backend.services.exam_service import ExamService
 from backend.models.exam_system import ExamConfig, StudentAnswer
 
-
+logger = logging.getLogger("exam_system.exams")
 router = APIRouter()
 
 
@@ -24,8 +25,10 @@ async def create_exam(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.info("create_exam name=%s num_questions=%s adaptive=%s", exam_data.name, exam_data.num_questions, exam_data.adaptive)
     exam_config = ExamConfig(**exam_data.dict())
     exam = service.create_exam(exam_config)
+    logger.info("create_exam success exam_id=%s join_code=%s", exam.exam_id, exam.join_code)
     return ExamResponse(**exam.dict())
 
 
@@ -46,8 +49,10 @@ async def get_exam(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.debug("get_exam exam_id=%s", exam_id)
     exam = service.get_exam(exam_id)
     if not exam:
+        logger.warning("get_exam not found exam_id=%s", exam_id)
         raise HTTPException(status_code=404, detail="Экзамен не найден")
     return ExamResponse(**exam.dict())
 
@@ -59,14 +64,40 @@ async def submit_exam(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.info("submit_exam exam_id=%s student_id=%s answers_count=%s", exam_id, submission.student_id, len(submission.answers))
     exam = service.get_exam(exam_id)
     if not exam:
+        logger.warning("submit_exam exam not found exam_id=%s", exam_id)
         raise HTTPException(status_code=404, detail="Экзамен не найден")
-    
     answers = [StudentAnswer(**ans.dict()) for ans in submission.answers]
     evaluation = service.evaluate_student_answers(submission.student_id, answers)
-    
+    logger.info("submit_exam evaluated student_id=%s percentage=%.1f", submission.student_id, evaluation.get("percentage", 0))
     return EvaluationResponse(**evaluation)
+
+
+@router.get("/join/{join_code}", response_model=ExamResponse)
+async def get_exam_by_join_code(
+    join_code: str,
+    request: Request = None,
+    service: ExamService = Depends(get_exam_service)
+):
+    logger.info("get_exam_by_join_code join_code=%s", join_code)
+    exam = service.get_exam_by_join_code(join_code)
+    if not exam:
+        logger.warning("get_exam_by_join_code not found join_code=%s", join_code)
+        raise HTTPException(status_code=404, detail="Экзамен с таким кодом не найден")
+    return ExamResponse(**exam.dict())
+
+
+@router.post("/create-sample", response_model=ExamResponse)
+async def create_sample_exam(
+    request: Request = None,
+    service: ExamService = Depends(get_exam_service)
+):
+    logger.info("create_sample_exam")
+    exam = service.create_sample_exam()
+    logger.info("create_sample_exam success exam_id=%s join_code=%s", exam.exam_id, exam.join_code)
+    return ExamResponse(**exam.dict())
 
 
 @router.get("/")
@@ -74,8 +105,10 @@ async def list_exams(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    count = len(service.exams)
+    logger.debug("list_exams count=%s", count)
     exams = [ExamResponse(**exam.dict()) for exam in service.exams.values()]
-    return {"exams": exams, "count": len(exams)}
+    return {"exams": exams, "count": count}
 
 
 @router.post("/create-from-materials", response_model=ExamResponse)
@@ -84,8 +117,9 @@ async def create_exam_from_materials(
     request: Request = None,
     service: ExamService = Depends(get_exam_service)
 ):
+    logger.info("create_exam_from_materials name=%s num_questions=%s has_text=%s unit_ids=%s",
+                request_data.name, request_data.num_questions, bool(request_data.text), bool(request_data.unit_ids))
     knowledge_service = request.app.state.knowledge_service
-    
 
     if request_data.text:
         units = knowledge_service.extract_knowledge_from_text(request_data.text)
@@ -144,13 +178,8 @@ async def create_exam_from_materials(
         num_questions=len(all_questions),
         unit_ids=unit_ids
     )
-    
-
-    exam = service.create_exam(exam_config)
-    
-
-    exam.questions = all_questions
-    
+    exam = service.create_exam(exam_config, questions=all_questions)
+    logger.info("create_exam_from_materials success exam_id=%s questions=%s", exam.exam_id, len(all_questions))
     return ExamResponse(**exam.dict())
 
 
@@ -165,10 +194,10 @@ async def create_exam_from_pdf(
     service: ExamService = Depends(get_exam_service)
 ):
     knowledge_service = request.app.state.knowledge_service
-    
+    logger.info("create_exam_from_pdf file=%s num_questions=%s", getattr(file, "filename", None), num_questions)
     try:
-
         contents = await file.read()
+        logger.debug("create_exam_from_pdf read bytes=%s", len(contents))
         text = ""
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
             for page in pdf.pages[:20]:  
@@ -229,12 +258,10 @@ async def create_exam_from_pdf(
             num_questions=len(all_questions),
             unit_ids=unit_ids
         )
-        
-        exam = service.create_exam(exam_config)
-        exam.questions = all_questions
-        
+        exam = service.create_exam(exam_config, questions=all_questions)
+        logger.info("create_exam_from_pdf success exam_id=%s questions=%s", exam.exam_id, len(all_questions))
         return ExamResponse(**exam.dict())
-    
     except Exception as e:
+        logger.exception("create_exam_from_pdf error: %s", e)
         raise HTTPException(status_code=400, detail=f"Ошибка при обработке PDF: {str(e)}")
 

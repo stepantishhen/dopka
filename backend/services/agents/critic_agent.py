@@ -1,17 +1,15 @@
 import json
 import re
 from typing import Dict, Any
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
 from backend.services.agents.base_agent import BaseAgent
 from backend.models.session import AgentRequest, AgentResponse, AgentType
-from backend.config import settings
+from backend.services.llm_client import LLMClient
 
 
 class CriticAgent(BaseAgent):
     def __init__(self):
         super().__init__(AgentType.CRITIC)
-        self.giga = GigaChat(credentials=settings.gigachat_credentials, verify_ssl_certs=False)
+        self.llm = LLMClient()
     
     def _safe_parse_json(self, text: str) -> Dict[str, Any]:
         if not text:
@@ -64,38 +62,76 @@ class CriticAgent(BaseAgent):
         
         return self._create_response(False, error=f"Unknown action: {action}")
     
+    def _format_dialogue_context(self, context: Dict[str, Any]) -> str:
+        raw = context.get("dialogue_context", "").strip()
+        if not raw:
+            return ""
+        return f"Контекст диалога (последние реплики):\n{raw}\n\n"
+
     async def _evaluate_answer(self, context: Dict[str, Any]) -> AgentResponse:
         question = context.get("question", {})
         answer = context.get("answer", "")
         reference_answer = context.get("reference_answer", "")
         criteria = context.get("criteria", [])
-        
-        system_prompt = "Ты эксперт-преподаватель, оценивающий ответы студентов. Оценивай объективно и конструктивно."
-        user_prompt = f"""Вопрос: {question}
+        dialogue_block = self._format_dialogue_context(context)
+
+        max_for_question = float(context.get("max_score_for_this_question") or 100.0)
+        answer_str = (answer or "").strip()
+        if not answer_str or len(answer_str) < 3:
+            return self._create_response(True, {"evaluation": {
+                "score": 0,
+                "max_score": max_for_question,
+                "is_correct": False,
+                "overall_feedback": "Ответ отсутствует или слишком краткий. Попробуйте ответить развёрнуто.",
+                "criteria_scores": []
+            }})
+
+        num_questions = context.get("num_questions")
+        question_number = context.get("question_number")
+        already_earned = float(context.get("already_earned") or 0)
+        question_info = ""
+        if num_questions is not None and question_number is not None:
+            question_info = f"Это вопрос {question_number} из {num_questions}. Весь экзамен — 100 баллов суммарно. Уже набрано за предыдущие вопросы: {already_earned:.0f}. За этот вопрос можно выставить не более {max_for_question:.1f} баллов. Минимум для сдачи экзамена — 56 баллов. НЕ ВЫХОДИ за 0 и за максимум для этого вопроса.\n\n"
+
+        system_prompt = """Ты эксперт-преподаватель. Оцениваешь ответ на один вопрос экзамена.
+
+ВЕСЬ ЭКЗАМЕН В СУММЕ = 100 баллов. Минимум для сдачи — 56 баллов. Нельзя выходить за минимум и максимум.
+Тебе передают: сколько баллов уже набрано, и максимум баллов за текущий вопрос. Ты выставляешь балл только за этот вопрос (от 0 до указанного максимума). Сумма по всем вопросам не должна превышать 100.
+- is_correct = true только если ответ по смыслу верный и по теме.
+- Неверный/не по теме — is_correct: false, score ближе к 0.
+- Частичное понимание — is_correct: false, средний балл за долю вопроса.
+- Верный ответ — is_correct: true, ставь долю от максимума за этот вопрос в зависимости от полноты.
+Строго: score не больше переданного max_score_for_this_question и не меньше 0."""
+        user_prompt = f"""{dialogue_block}{question_info}Вопрос: {question}
 Эталонный ответ: {reference_answer}
 Критерии: {json.dumps(criteria, ensure_ascii=False)}
 Ответ студента: {answer}
 
-Оцени ответ. Формат ответа ТОЛЬКО JSON:
+Выставь балл за этот вопрос от 0 до {max_for_question:.1f} (не больше). Формат ответа ТОЛЬКО JSON:
 {{
-    "score": 8.5,
-    "max_score": 10,
-    "is_correct": false,
-    "overall_feedback": "Обратная связь",
+    "score": число от 0 до {max_for_question:.1f},
+    "max_score": {max_for_question:.1f},
+    "is_correct": true только если ответ верный по смыслу,
+    "overall_feedback": "Краткая обратная связь",
     "criteria_scores": []
 }}"""
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=1000)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=1000)
             
             result = self._safe_parse_json(response_text)
             if result:
+                score_val = result.get("score", 0)
+                result["max_score"] = max_for_question
+                result["score"] = max(0.0, min(max_for_question, float(score_val) if score_val is not None else 0))
+                if "is_correct" not in result or result.get("is_correct") is None:
+                    result["is_correct"] = result["score"] >= (max_for_question * 0.56)
+                if result["score"] < (max_for_question * 0.56) and not result.get("is_correct"):
+                    result["is_correct"] = False
                 return self._create_response(True, {"evaluation": result})
             
             return self._create_response(False, error="Failed to parse evaluation")
@@ -107,9 +143,10 @@ class CriticAgent(BaseAgent):
         answer = context.get("answer", "")
         question = context.get("question", "")
         reference = context.get("reference_answer", "")
-        
-        system_prompt = "Ты эксперт, анализирующий цепочку рассуждений студентов. Выявляй логические ошибки и пропущенные шаги."
-        user_prompt = f"""Вопрос: {question}
+        dialogue_block = self._format_dialogue_context(context)
+
+        system_prompt = "Ты эксперт, анализирующий цепочку рассуждений студентов. Учитывай контекст диалога. Выявляй логические ошибки и пропущенные шаги."
+        user_prompt = f"""{dialogue_block}Вопрос: {question}
 Ответ студента: {answer}
 
 Проанализируй цепочку рассуждений. Формат ответа ТОЛЬКО JSON:
@@ -123,12 +160,10 @@ class CriticAgent(BaseAgent):
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=600)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=600)
             
             result = self._safe_parse_json(response_text)
             if result:
@@ -144,9 +179,10 @@ class CriticAgent(BaseAgent):
         answer = context.get("answer", "")
         reference_answer = context.get("reference_answer", "")
         reasoning_analysis = context.get("reasoning_analysis", {})
-        
-        system_prompt = "Ты эксперт, идентифицирующий конкретные ошибки в ответах студентов."
-        user_prompt = f"""Вопрос: {question}
+        dialogue_block = self._format_dialogue_context(context)
+
+        system_prompt = "Ты эксперт, идентифицирующий конкретные ошибки в ответах студентов. Учитывай контекст диалога."
+        user_prompt = f"""{dialogue_block}Вопрос: {question}
 Эталонный ответ: {reference_answer}
 Ответ студента: {answer}
 Анализ рассуждений: {json.dumps(reasoning_analysis, ensure_ascii=False)}
@@ -161,12 +197,10 @@ class CriticAgent(BaseAgent):
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=500)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=500)
             
             result = self._safe_parse_json(response_text)
             if result:

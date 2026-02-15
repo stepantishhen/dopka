@@ -157,7 +157,6 @@ const ChatDialog = () => {
                 </div>
               ) : (
                 <div className="d-flex flex-column gap-3">
-                  {/* Показываем историю диалога из оркестратора, если доступна */}
                   {useOrchestrator && dialogueHistory.length > 0 ? (
                     dialogueHistory.map((msg, idx) => (
                       <div

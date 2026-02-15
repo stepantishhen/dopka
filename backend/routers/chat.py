@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import List, Optional
 from datetime import datetime
@@ -5,7 +6,7 @@ from datetime import datetime
 from backend.schemas.chat import ChatCreate, ChatResponse, MessageSend
 from backend.services.chat_service import ChatService
 
-
+logger = logging.getLogger("exam_system.chat")
 router = APIRouter()
 
 
@@ -20,9 +21,10 @@ async def create_chat(
     service: ChatService = Depends(get_chat_service)
 ):
     title = chat_data.title or "Новый экзамен"
+    logger.info("create_chat title=%s", title)
     chat_id = service.create_chat(title)
     chat = service.get_chat(chat_id)
-    
+    logger.info("create_chat success chat_id=%s", chat_id)
     return ChatResponse(
         id=chat["id"],
         title=chat["title"],
@@ -38,8 +40,10 @@ async def get_chat(
     request: Request = None,
     service: ChatService = Depends(get_chat_service)
 ):
+    logger.debug("get_chat chat_id=%s", chat_id)
     chat = service.get_chat(chat_id)
     if not chat:
+        logger.warning("get_chat not found chat_id=%s", chat_id)
         raise HTTPException(status_code=404, detail="Чат не найден")
     
     return ChatResponse(
@@ -58,10 +62,11 @@ async def send_message(
     request: Request = None,
     service: ChatService = Depends(get_chat_service)
 ):
+    logger.info("send_message chat_id=%s message_len=%s", chat_id, len(message_data.message or ""))
     chat = service.get_chat(chat_id)
     if not chat:
+        logger.warning("send_message chat not found chat_id=%s", chat_id)
         raise HTTPException(status_code=404, detail="Чат не найден")
-    
     user_message = {
         "id": f"msg_{datetime.now().timestamp()}",
         "text": message_data.message,
@@ -82,9 +87,8 @@ async def send_message(
     }
     
     service.add_message(chat_id, ai_message)
-    
     updated_chat = service.get_chat(chat_id)
-    
+    logger.info("send_message success chat_id=%s messages_count=%s", chat_id, len(updated_chat["messages"]))
     return ChatResponse(
         id=updated_chat["id"],
         title=updated_chat["title"],
@@ -99,6 +103,7 @@ async def list_chats(
     request: Request = None,
     service: ChatService = Depends(get_chat_service)
 ):
+    logger.debug("list_chats count=%s", len(service.chats))
     chats = [
         ChatResponse(
             id=chat["id"],

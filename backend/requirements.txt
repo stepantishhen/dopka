@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic
 python-multipart
 python-dotenv
+openai
 gigachat
 sentence-transformers
 numpy
@@ -12,3 +13,7 @@ aiofiles
 requests
 pydantic-settings
 faiss-cpu
+sqlalchemy
+psycopg2-binary
+python-jose[cryptography]
+bcrypt

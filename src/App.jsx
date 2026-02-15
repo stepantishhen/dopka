@@ -2,6 +2,7 @@ import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import Navigation from './components/Navigation'
 import Login from './pages/Login'
+import JoinExam from './pages/JoinExam'
 import Home from './pages/Home'
 import History from './pages/History'
 import Profile from './pages/Profile'
@@ -29,6 +30,7 @@ function App() {
           <div className="d-flex flex-column" style={{ minHeight: '100vh' }}>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/join/:code?" element={<JoinExam />} />
               <Route
                 path="/*"
                 element={

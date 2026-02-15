@@ -5,6 +5,7 @@ from backend.services.agents.base_agent import BaseAgent
 from backend.models.session import AgentRequest, AgentResponse, AgentType
 from backend.config import settings
 import json
+import random
 import re
 import uuid
 
@@ -60,7 +61,9 @@ class PlanningAgent(BaseAgent):
             return await self._select_next_question(context)
         elif action == "plan_sequence":
             return await self._plan_sequence(context, request.session_state)
-        
+        elif action == "plan_exam":
+            return await self._plan_exam(context)
+
         return self._create_response(False, error=f"Unknown action: {action}")
     
     async def _select_next_question(self, context: Dict[str, Any]) -> AgentResponse:
@@ -116,7 +119,9 @@ class PlanningAgent(BaseAgent):
         available_questions.sort(key=lambda x: x.get("priority_score", 0), reverse=True)
         
         if available_questions:
-            selected = available_questions[0]
+            top_n = 5
+            candidates = available_questions[:top_n]
+            selected = random.choice(candidates)
             if not selected.get("question_id"):
                 selected["question_id"] = f"q_{uuid.uuid4().hex[:8]}"
             return self._create_response(
@@ -159,4 +164,28 @@ class PlanningAgent(BaseAgent):
                 "avg_score": avg_score
             }
         )
+
+    async def _plan_exam(self, context: Dict[str, Any]) -> AgentResponse:
+        num_questions = context.get("num_questions", 10)
+        adaptive = context.get("adaptive", True)
+        unit_ids = context.get("unit_ids") or list(self.knowledge_service.knowledge_base.keys())
+
+        max_score_per_question = 100
+        pass_percent = 0.56
+        total_max = num_questions * max_score_per_question
+        pass_score = round(total_max * pass_percent, 1)
+
+        plan = {
+            "num_questions": num_questions,
+            "adaptive": adaptive,
+            "scoring": {
+                "max_score_per_question": max_score_per_question,
+                "total_max_score": total_max,
+                "pass_percent": pass_percent,
+                "pass_score": pass_score,
+            },
+            "difficulty_curve": "adaptive",
+            "unit_ids": unit_ids[: num_questions + 5],
+        }
+        return self._create_response(True, {"exam_plan": plan, "scoring_config": plan["scoring"]})
 

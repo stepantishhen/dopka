@@ -1,21 +1,23 @@
+import logging
 import re
 import json
 from typing import Dict, List, Optional
 from datetime import datetime
-from gigachat import GigaChat
-from gigachat.models import Chat, Messages, MessagesRole
 from sentence_transformers import SentenceTransformer
+
+from backend.services.llm_client import LLMClient
 import faiss
 import numpy as np
 import networkx as nx
 
 from backend.models.didactic_unit import DidacticUnit
-from backend.config import settings
+
+logger = logging.getLogger("exam_system.knowledge_service")
 
 
 class KnowledgeService:
     def __init__(self):
-        self.giga = GigaChat(credentials=settings.gigachat_credentials, verify_ssl_certs=False)
+        self.llm = LLMClient()
         self.embedding_model = SentenceTransformer(
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
         )
@@ -61,13 +63,13 @@ class KnowledgeService:
                 json_text = json_text.rsplit(']', 1)[0] + ']'
             return json.loads(json_text)
         except Exception as e:
-            print(f"JSON parsing error: {e}")
+            logger.debug("safe_parse_json error: %s", e)
             return None
-    
+
     def extract_knowledge_from_text(self, text: str) -> List[DidacticUnit]:
+        logger.info("extract_knowledge_from_text text_len=%s", len(text))
         if len(text) > 4000:
             text = text[:4000] + "... [текст сокращен]"
-        
         system_prompt = "Ты эксперт-преподаватель, извлекающий дидактические единицы из текста. Извлекай ключевые концепции, определения, примеры и типичные ошибки."
         user_prompt = f"""Текст для анализа:
 {text}
@@ -88,12 +90,10 @@ class KnowledgeService:
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=2000)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=2000)
             
             data = self.safe_parse_json(response_text)
             
@@ -132,15 +132,17 @@ class KnowledgeService:
                     print(f"Ошибка при обработке единицы: {e}")
                     continue
             
+            logger.info("extract_knowledge_from_text success units=%s", len(units))
             return units
         except Exception as e:
-            print(f"Ошибка при извлечении знаний: {e}")
+            logger.exception("extract_knowledge_from_text error: %s", e)
             return []
-    
+
     def generate_questions_for_unit(self, unit_id: str, num_questions: int = 5) -> bool:
+        logger.info("generate_questions_for_unit unit_id=%s num_questions=%s", unit_id, num_questions)
         if unit_id not in self.knowledge_base:
+            logger.warning("generate_questions_for_unit unit not found unit_id=%s", unit_id)
             return False
-        
         unit = self.knowledge_base[unit_id]
         
         system_prompt = "Ты эксперт-преподаватель, генерирующий вопросы для проверки знаний студентов."
@@ -165,12 +167,10 @@ class KnowledgeService:
         
         try:
             messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ]
-            payload = Chat(messages=messages, temperature=0.5, max_tokens=2000)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
+            response_text = self.llm.chat(messages, temperature=0.5, max_tokens=2000)
             
             data = self.safe_parse_json(response_text)
             if data and "questions" in data:

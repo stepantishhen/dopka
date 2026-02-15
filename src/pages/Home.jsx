@@ -108,13 +108,18 @@ const Home = () => {
                       <Spinner animation="border" size="sm" />
                       <p className="mt-2 text-muted">Загрузка экзаменов...</p>
                     </div>
-                  ) : availableExams.length === 0 ? (
-                    <div className="text-center p-4 text-muted">
-                      Нет доступных экзаменов. Обратитесь к преподавателю.
-                    </div>
                   ) : (
                     <ListGroup variant="flush">
+                      <ListGroup.Item
+                        action
+                        onClick={() => handleExamClick('exam_test')}
+                        className="d-flex justify-content-between align-items-center"
+                      >
+                        <span>Тестовый экзамен (5 вопросов)</span>
+                        <Badge bg="info">TEST01</Badge>
+                      </ListGroup.Item>
                       {availableExams
+                        .filter(exam => exam.exam_id !== 'exam_test')
                         .filter(exam => 
                           exam.config.name.toLowerCase().includes(searchTerm.toLowerCase())
                         )
@@ -212,19 +217,22 @@ const Home = () => {
                         Выберите экзамен из списка слева или начните новый диалог
                       </p>
                     ) : (
-                      <>
-                        <p className="text-muted mb-4">
-                          Начните новый экзамен с виртуальным экзаменатором
-                        </p>
-                        <div className="d-flex gap-2 justify-content-center">
-                          <Button variant="primary" size="lg" onClick={handleNewChat}>
-                            Начать новый экзамен (Чат)
-                          </Button>
-                          <Button variant="success" size="lg" onClick={() => navigate('/exam')}>
-                            Начать экзамен (Multi-Agent)
-                          </Button>
-                        </div>
-                      </>
+                    <>
+                      <p className="text-muted mb-4">
+                        Начните новый экзамен или присоединитесь по коду
+                      </p>
+                      <div className="d-flex flex-wrap gap-2 justify-content-center">
+                        <Button variant="primary" size="lg" onClick={handleNewChat}>
+                          Новый экзамен (Чат)
+                        </Button>
+                        <Button variant="success" size="lg" onClick={() => navigate('/exam')}>
+                          Экзамен (Multi-Agent)
+                        </Button>
+                        <Button variant="outline-primary" size="lg" onClick={() => navigate('/join')}>
+                          Присоединиться по коду
+                        </Button>
+                      </div>
+                    </>
                     )}
                   </>
                 ) : (

@@ -18,7 +18,8 @@ class ExamResponse(BaseModel):
     status: str
     questions: List[Dict]
     link: str
-    
+    join_code: Optional[str] = None
+
     class Config:
         from_attributes = True
 

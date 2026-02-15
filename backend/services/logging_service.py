@@ -1,16 +1,29 @@
 import logging
-import json
+import os
+import sys
 from typing import Dict, Any, Optional
 from datetime import datetime
 from functools import wraps
 import time
 
+try:
+    from zoneinfo import ZoneInfo
+    _tz = ZoneInfo(os.environ.get("TZ", "Europe/Moscow"))
+except Exception:
+    _tz = None
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
+class TZFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=_tz) if _tz else datetime.fromtimestamp(record.created)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(TZFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger("exam_system")
 
 
@@ -43,7 +56,15 @@ class LoggingService:
         
         self.metrics["api_requests"].append(log_entry)
         self.metrics["total_requests"] += 1
-        logger.info(f"API Request: {method} {path} - {status_code} ({response_time*1000:.2f}ms)")
+        extra = " ".join(f"{k}={v}" for k, v in kwargs.items() if v is not None)
+        logger.info(
+            "API %s %s -> %s %.2fms%s",
+            method,
+            path,
+            status_code,
+            response_time * 1000,
+            " " + extra if extra else "",
+        )
         
         if len(self.metrics["api_requests"]) > 1000:
             self.metrics["api_requests"] = self.metrics["api_requests"][-1000:]
