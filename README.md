@@ -1,200 +1,155 @@
-# Система обучения с виртуальным экзаменатором
+# DOPKA
 
-Мульти-агентная система для обучения студентов с использованием LLM и адаптивных экзаменов.
+Мульти-агентная система для проведения диалоговых экзаменов с виртуальным экзаменатором. Студенты отвечают на вопросы в чате, получают оценку и уточняющие подсказки; преподаватели создают экзамены из материалов и смотрят аналитику.
 
 ## Возможности
 
-### Для студентов:
-- Экзамены в диалоговом режиме с виртуальным экзаменатором
-- Адаптивные вопросы на основе производительности
-- Уточняющие вопросы и обратная связь
-- История пройденных экзаменов
-- Профиль и статистика обучения
+**Студенты**
+- Прохождение экзамена в диалоговом режиме (вопрос → ответ → оценка / уточнение)
+- Шкала: весь экзамен — 100 баллов суммарно по всем вопросам, порог сдачи — 56
+- Баллы начисляются только за правильные ответы; при ошибке — уточняющий вопрос без добавления баллов
+- Случайный порядок/варианты вопросов по дидактическим единицам
+- Фиксированная левая панель: прогресс, текущий балл, подсказки
+- Завершение экзамена и экран результатов без возврата к вопросам
 
-### Для преподавателей:
-- Создание экзаменов из материалов (текст/PDF)
-- Управление базой знаний
-- Просмотр истории диалогов студентов
-- Аналитика и метрики системы
-- Профиль и настройки
+**Преподаватели**
+- Создание экзаменов из текста или PDF
+- База знаний: дидактические единицы, извлечение из текста/PDF, генерация вопросов
+- Список экзаменов, коды присоединения
+- Аналитика по студентам и сессиям (`/api/teacher`)
 
-## Технологии
+## Стек
 
-### Frontend:
-- React 18
-- React Router DOM 6
-- Bootstrap 5
-- React Bootstrap 2
-- Vite
+**Frontend:** React 18, React Router 6, Bootstrap 5, React Bootstrap, Vite
 
-### Backend:
-- FastAPI
-- OpenAI-совместимый API (OpenAI, Claude, GigaChat и др.)
-- Sentence Transformers
-- FAISS
-- NetworkX
-- Python 3.12
+**Backend:** FastAPI, OpenAI-совместимый API (OpenAI, GigaChat и др.), Pydantic, SQLAlchemy (SQLite/PostgreSQL), при необходимости — sentence-transformers, FAISS, NetworkX
 
 ## Быстрый старт
 
-### Запуск через Docker Compose
+### Docker Compose
 
 ```bash
-sudo docker compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
-- Backend: http://localhost:8000
-- Frontend: http://localhost:3000
-- API Docs: http://localhost:8000/docs
+- Backend: http://localhost:8000  
+- Frontend: http://localhost:3000  
+- API Docs: http://localhost:8000/docs  
 
-### Локальная установка
+### Локально
 
-#### Backend
+**Backend**
 
-1. Python 3.11 или 3.12 (не рекомендуется 3.14)
-2. Создайте виртуальное окружение:
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-3. Создайте `.env`:
+Создайте в корне проекта или в `backend/` файл `.env`:
+
 ```env
-# LLM — OpenAI-совместимый API (любой провайдер: OpenAI, Claude через прокси, GigaChat и т.д.)
 OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://openai.api.proxyapi.ru/v1
-OPENAI_MODEL=anthropic/claude-sonnet-4-20250514
-
-# Устаревшее — можно использовать как fallback для OPENAI_API_KEY
-GIGACHAT_CREDENTIALS=
-
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
 DATABASE_URL=sqlite:///./exam_system.db
-SECRET_KEY=your-secret-key-here
+SECRET_KEY=your-secret-key
 DEBUG=True
 CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
-4. Запустите:
+Запуск:
+
 ```bash
 python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-#### Frontend
+**Frontend**
 
 ```bash
 npm install
 npm run dev
 ```
 
+По умолчанию фронт ожидает API на `http://localhost:8000/api` (или задайте `VITE_API_BASE_URL`).
+
 ## Архитектура
 
-Мульти-агентная система с оркестратором:
+Оркестратор управляет сессией и вызывает агентов:
 
-- **Core Orchestrator** - управление workflow между агентами
-- **Knowledge Agent** - работа с базой знаний, семантический поиск
-- **Dialogue Agent** - ведение диалога, уточняющие вопросы
-- **Critic Agent** - оценка ответов, анализ рассуждений
-- **Planning Agent** - адаптивный выбор вопросов
-- **Analytics Agent** - сбор метрик и аналитика
+| Агент | Назначение |
+|-------|------------|
+| **Critic** | Оценка ответа (0–100 баллов за экзамен в сумме, доля на вопрос), is_correct, обратная связь |
+| **Dialogue** | Уточняющие вопросы, переформулировка, подсказки при неверном ответе |
+| **Planning** | Выбор следующего вопроса (адаптивно или по списку), случайный фактор среди топ-N |
+| **Adaptive Exam** | Стратегия при пустом/слабом ответе (уровень упрощения, тактика) |
+| **Analytics** | Запись метрик по сессии |
+| **Knowledge** | База знаний, дидактические единицы (при использовании) |
 
-## API Endpoints
+Логика баллов:
+- Экзамен = 100 баллов максимум; минимум для сдачи — 56.
+- Агент оценивания получает номер вопроса, число вопросов и оставшийся бюджет, выставляет балл за текущий вопрос; бэкенд суммирует только оценки с `is_correct: true`.
+- Контекст диалога: в LLM передаётся минимум 4 последних сообщения.
 
-### Оркестратор (`/api/orchestrator`)
-- `POST /sessions` - Создание сессии
-- `GET /sessions/{id}` - Получение сессии
-- `POST /sessions/{id}/answer` - Отправка ответа
-- `POST /sessions/{id}/next-question` - Следующий вопрос
-- `POST /sessions/{id}/insights` - Инсайты
-- `GET /sessions/{id}/dialogue` - История диалога
+## API (основное)
 
-### Экзамены (`/api/exams`)
-- `GET /` - Список экзаменов
-- `GET /{exam_id}` - Получить экзамен
-- `GET /join/{join_code}` - Получить экзамен по коду присоединения
-- `POST /create-sample` - Создать тестовый экзамен (без LLM)
-- `POST /create-from-materials` - Создать из текста
-- `POST /create-from-pdf` - Создать из PDF
+**Оркестратор** `/api/orchestrator`
+- `POST /sessions` — создание сессии (student_id, exam_id опционально)
+- `GET /sessions/{session_id}` — статус сессии, при завершении — total_score, max_total_score, passed
+- `POST /sessions/{session_id}/answer` — отправить ответ (question_id, answer, question_data)
+- `POST /sessions/{session_id}/next-question` — следующий вопрос (exam_config)
+- `POST /sessions/{session_id}/complete` — завершить экзамен
+- `GET /sessions/{session_id}/dialogue` — история диалога
 
-### Аутентификация (`/api/auth`)
-- `POST /register` - Регистрация (email, password, name, role)
-- `POST /login` - Вход (email, password)
+**Экзамены** `/api/exams`
+- `GET /` — список экзаменов
+- `GET /{exam_id}` — экзамен по ID
+- `GET /join/{join_code}` — экзамен по коду входа
+- `POST /create-from-materials` — экзамен из текста (name, text или unit_ids, num_questions, adaptive, questions_per_unit)
+- `POST /create-from-pdf` — экзамен из PDF
 
-### База знаний (`/api/knowledge-base`)
-- `GET /items` - Все элементы
-- `POST /items` - Создать элемент
-- `POST /extract-from-text` - Извлечь из текста
-- `POST /extract-from-pdf` - Извлечь из PDF
-- `POST /units/{unit_id}/generate-questions` - Генерация вопросов
+**Аутентификация** `/api/auth`
+- `POST /register`, `POST /login` — регистрация и вход (email, password, name, role)
 
-### Метрики
-- `GET /api/metrics` - Метрики системы
+**Преподаватель** `/api/teacher` (требуется роль преподавателя)
+- `GET /students` — студенты с аналитикой
+- `GET /students/{student_id}/analytics` — аналитика по студенту
 
-## Создание экзаменов
-
-### Через интерфейс
-
-1. Перейдите в "База знаний" (преподаватель)
-2. Нажмите "Создать экзамен из материалов"
-3. Выберите способ: текст или PDF
-4. Заполните параметры и создайте экзамен
-
-### Через API
-
-```bash
-POST /api/exams/create-from-materials
-{
-  "name": "Экзамен по Python",
-  "text": "Текст материала...",
-  "num_questions": 10,
-  "adaptive": true
-}
-```
-
-## Workflow диалогового режима
-
-1. Студент выбирает экзамен → `/exam/{examId}`
-2. Система загружает экзамен и создает сессию
-3. Студент отвечает на вопросы
-4. Critic Agent оценивает ответ
-5. При неверном ответе → Dialogue Agent генерирует уточняющий вопрос
-6. Студент может ответить снова
-7. После правильного ответа → переход к следующему вопросу
+**База знаний** `/api/knowledge-base`
+- Элементы, извлечение из текста/PDF, генерация вопросов по единице
 
 ## Структура проекта
 
 ```
-.
 ├── backend/
 │   ├── main.py
 │   ├── config.py
-│   ├── models/
+│   ├── database.py
+│   ├── models/          # session, exam, didactic_unit, user, analytics
 │   ├── schemas/
+│   ├── routers/         # orchestrator, exams, auth, teacher, knowledge_base, chat, students
 │   ├── services/
 │   │   ├── orchestrator.py
-│   │   ├── agents/
+│   │   ├── exam_service.py
 │   │   ├── knowledge_service.py
-│   │   └── exam_service.py
-│   ├── routers/
+│   │   ├── chat_service.py
+│   │   ├── llm_client.py
+│   │   └── agents/      # critic, dialogue, planning, adaptive_exam, analytics, knowledge
+│   ├── repositories/
 │   └── middleware/
 ├── src/
-│   ├── components/
-│   ├── pages/
-│   ├── context/
-│   └── services/
+│   ├── components/      # ExamSession, ChatDialog, Navigation, Analytics, ProtectedRoute
+│   ├── pages/           # Home, Login, JoinExam, Exams, KnowledgeBase, Profile, History
+│   ├── context/         # AuthContext, ExamSessionContext, ChatContext
+│   └── services/        # api
+├── index.html
+├── package.json
+├── vite.config.js
+├── docker-compose.yml
+├── docker-compose.dev.yml
 └── README.md
 ```
-
-## Особенности
-
-- Мульти-агентная архитектура
-- Адаптивные экзамены
-- Диалоговый режим с уточняющими вопросами
-- Семантический поиск через FAISS
-- Генерация вопросов через LLM
-- Аналитика и метрики
-- Извлечение знаний из PDF
 
 ## Лицензия
 
