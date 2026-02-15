@@ -24,14 +24,38 @@ class ExamService:
             return None
         
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            json_text = json_match.group()
-            try:
-                json_text = json_text.replace('\ufeff', '').replace('\u200b', '')
-                return json.loads(json_text)
-            except:
-                return None
-        return None
+        if not json_match:
+            patterns = [
+                r'```json\s*(.*?)\s*```',
+                r'```\s*(.*?)\s*```',
+                r'JSON:\s*(\{.*\})',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+                if match:
+                    json_match = match
+                    break
+        
+        if not json_match:
+            return None
+        
+        json_text = json_match.group(1) if json_match and len(json_match.groups()) > 0 else (json_match.group() if json_match else text)
+        
+        try:
+            json_text = json_text.replace('\ufeff', '').replace('\u200b', '')
+            json_text = json_text.replace('"', '"').replace('"', '"')
+            json_text = re.sub(r',\s*}', '}', json_text)
+            json_text = re.sub(r',\s*]', ']', json_text)
+            json_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_text)
+            json_text = json_text.strip()
+            if json_text.startswith('{') and not json_text.endswith('}'):
+                json_text = json_text.rsplit('}', 1)[0] + '}'
+            if json_text.startswith('[') and not json_text.endswith(']'):
+                json_text = json_text.rsplit(']', 1)[0] + ']'
+            return json.loads(json_text)
+        except Exception as e:
+            print(f"JSON parsing error: {e}")
+            return None
     
     def create_exam(self, exam_config: ExamConfig) -> Exam:
         exam_id = f"exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -146,69 +170,22 @@ class ExamService:
         return report
     
     def _evaluate_single_answer(self, question: Dict, answer: str) -> Dict:
-        system_prompt = """Ты - строгий но справедливый экзаменатор. Оцени ответ студента."""
-        
-        user_prompt = f"""
-        Вопрос: {question.get('question', '')}
-        Критерии: {json.dumps(question.get('criteria', []), ensure_ascii=False)}
-        Эталонный ответ: {question.get('reference_answer', 'Не предоставлен')}
-        Ответ студента: {answer}
-        
-        Оцени ответ. Формат ответа ТОЛЬКО JSON:
-        {{
-            "score": 8.5,
-            "max_score": 10,
-            "criteria_scores": [],
-            "overall_feedback": "Обратная связь",
-            "errors": [],
-            "strengths": [],
-            "improvement_suggestions": []
-        }}
-        """
-        
-        try:
-            messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=user_prompt)
-            ]
-            payload = Chat(messages=messages, temperature=0.3, max_tokens=1000)
-            response = self.giga.chat(payload)
-            response_text = response.choices[0].message.content
-            
-            result = self.safe_parse_json(response_text)
-            if result:
-                return result
-        except Exception as e:
-            print(f"Ошибка при оценивании: {e}")
-        
-        return {
-            "score": 0,
-            "max_score": 10,
-            "overall_feedback": "Не удалось оценить ответ",
-            "errors": [],
-            "strengths": [],
-            "improvement_suggestions": []
-        }
-    
-    def assess_emotional_state(self, student_id: str, responses: List[str]) -> EmotionalState:
-        system_prompt = """Ты - психолог. Оцени эмоциональное состояние студента."""
-        
-        responses_text = "\n".join([f"Ответ {i+1}: {resp}" for i, resp in enumerate(responses[-5:])])
-        
-        user_prompt = f"""
-        Текстовые ответы студента:
-        {responses_text}
-        
-        Оцени состояние. Формат ответа ТОЛЬКО JSON:
-        {{
-            "emotional_state": "neutral",
-            "confidence_score": 0.5,
-            "anxiety_score": 0.5,
-            "key_indicators": [],
-            "recommendations": [],
-            "communication_style": "neutral"
-        }}
-        """
+        system_prompt = "Ты эксперт-преподаватель, оценивающий ответы студентов. Оценивай объективно и конструктивно."
+        user_prompt = f"""Вопрос: {question.get('question', '')}
+Критерии: {json.dumps(question.get('criteria', []), ensure_ascii=False)}
+Эталонный ответ: {question.get('reference_answer', 'Не предоставлен')}
+Ответ студента: {answer}
+
+Оцени ответ. Формат ответа ТОЛЬКО JSON:
+{{
+    "score": 8.5,
+    "max_score": 10,
+    "criteria_scores": [],
+    "overall_feedback": "Обратная связь",
+    "errors": [],
+    "strengths": [],
+    "improvement_suggestions": []
+}}"""
         
         try:
             messages = [
@@ -221,20 +198,28 @@ class ExamService:
             
             data = self.safe_parse_json(response_text)
             if data:
-                emotional_state = EmotionalState(**data)
-                
-                if student_id in self.student_profiles:
-                    self.student_profiles[student_id].emotional_state = emotional_state
-                
-                return emotional_state
+                return data
+            
+            return {
+                "score": 0,
+                "max_score": 10,
+                "criteria_scores": [],
+                "overall_feedback": "Не удалось оценить ответ",
+                "errors": [],
+                "strengths": [],
+                "improvement_suggestions": []
+            }
         except Exception as e:
-            print(f"Ошибка при оценке эмоционального состояния: {e}")
-        
-        return EmotionalState(
-            emotional_state="neutral",
-            confidence_score=0.5,
-            anxiety_score=0.5
-        )
+            print(f"Ошибка при оценке ответа: {e}")
+            return {
+                "score": 0,
+                "max_score": 10,
+                "criteria_scores": [],
+                "overall_feedback": f"Ошибка при оценке: {str(e)}",
+                "errors": [],
+                "strengths": [],
+                "improvement_suggestions": []
+            }
     
     def get_or_create_student(self, student_id: str, name: str = "", group: str = "") -> StudentProfile:
         if student_id not in self.student_profiles:

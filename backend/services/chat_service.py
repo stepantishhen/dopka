@@ -12,22 +12,18 @@ class ChatService:
         self.chats: Dict[str, Dict] = {}
     
     def generate_ai_response(self, user_message: str, context: Optional[List[Dict]] = None) -> str:
-        system_prompt = """Ты - виртуальный экзаменатор. Задавай наводящие вопросы, 
-        помогай студенту найти ответ самостоятельно. Будь терпеливым и поддерживающим."""
-        
         context_text = ""
         if context:
             context_text = "\n".join([f"{msg.get('sender', 'user')}: {msg.get('text', '')}" 
                                     for msg in context[-5:]])
         
-        user_prompt = f"""
-        Предыдущие сообщения:
-        {context_text}
-        
-        Сообщение студента: {user_message}
-        
-        Ответь как экзаменатор. Задай уточняющий вопрос или помоги найти ответ.
-        """
+        system_prompt = "Ты опытный преподаватель, помогающий студентам в обучении. Отвечай дружелюбно и конструктивно."
+        user_prompt = f"""Контекст диалога:
+{context_text}
+
+Сообщение студента: {user_message}
+
+Ответь на вопрос студента или помоги ему разобраться в теме."""
         
         try:
             messages = [

@@ -48,3 +48,11 @@ class EvaluationResponse(BaseModel):
     recommendations: List[Dict]
     strengths: List[str]
 
+
+class CreateExamFromMaterialsRequest(BaseModel):
+    name: str
+    text: Optional[str] = None
+    unit_ids: Optional[List[str]] = None
+    num_questions: int = 10
+    adaptive: bool = True
+    questions_per_unit: int = 3
