@@ -10,6 +10,7 @@ const Exams = () => {
   const [error, setError] = useState(null)
   const [creatingSample, setCreatingSample] = useState(false)
   const [copiedCode, setCopiedCode] = useState(null)
+  const [importingStudents, setImportingStudents] = useState(false)
 
   useEffect(() => {
     loadExams()
@@ -41,16 +42,39 @@ const Exams = () => {
     }
   }
 
-  const copyJoinLink = (code) => {
-    const url = `${window.location.origin}/join/${code}`
+  const copyJoinLink = (exam) => {
+    const path = exam.join_path || (exam.join_code ? `/join/${exam.join_code}` : '')
+    if (!path) return
+    const url = `${window.location.origin}${path.startsWith('/') ? path : `/${path}`}`
     navigator.clipboard?.writeText(url).then(() => {
-      setCopiedCode(code)
+      setCopiedCode(exam.join_code)
       setTimeout(() => setCopiedCode(null), 2000)
     }).catch(() => {})
   }
 
   const handleViewExam = (examId) => {
     navigate(`/exam/${examId}`)
+  }
+
+  const handleImportStudents = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImportingStudents(true)
+    try {
+      const r = await api.importStudentsCsv(file)
+      const msg = `Создано учётных записей: ${r.created?.length ?? 0}, пропущено: ${r.skipped?.length ?? 0}.`
+      const pwdHint =
+        r.created?.length > 0
+          ? `\n\nВременные пароли показаны в ответе сервера (сохраните). Первая запись: ${r.created[0].email}`
+          : ''
+      alert(msg + pwdHint + '\n\nПодробности в консоли разработчика (Network).')
+      console.info('import_students', r)
+    } catch (err) {
+      setError(err.message || 'Ошибка импорта CSV')
+    } finally {
+      setImportingStudents(false)
+      e.target.value = ''
+    }
   }
 
   const formatDate = (dateString) => {
@@ -80,7 +104,7 @@ const Exams = () => {
     <Container className="py-4">
       <div className="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
         <h2 className="mb-0">Экзамены</h2>
-        <div className="d-flex gap-2">
+        <div className="d-flex flex-wrap gap-2 align-items-center">
           <Button
             variant="outline-success"
             onClick={handleCreateSample}
@@ -91,6 +115,15 @@ const Exams = () => {
           <Button variant="primary" onClick={() => navigate('/knowledge-base')}>
             Создать из материалов
           </Button>
+          <Form.Control
+            type="file"
+            accept=".csv,text/csv"
+            disabled={importingStudents}
+            onChange={handleImportStudents}
+            style={{ maxWidth: 220 }}
+            title="Импорт студентов: CSV с колонками email, name"
+          />
+          {importingStudents && <Spinner animation="border" size="sm" />}
         </div>
       </div>
 
@@ -145,7 +178,7 @@ const Exams = () => {
                             <Button
                               variant="outline-secondary"
                               size="sm"
-                              onClick={() => copyJoinLink(exam.join_code)}
+                              onClick={() => copyJoinLink(exam)}
                             >
                               📋
                             </Button>

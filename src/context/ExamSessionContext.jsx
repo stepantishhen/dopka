@@ -89,10 +89,11 @@ export const ExamSessionProvider = ({ children }) => {
         })
       }
 
-      if (result.feedback) {
+      const feedbackText = result.feedback || result.evaluation?.overall_feedback
+      if (feedbackText) {
         aiMessages.push({
           sender: 'ai',
-          text: result.feedback,
+          text: feedbackText,
           timestamp: new Date().toISOString(),
           type: 'feedback',
         })

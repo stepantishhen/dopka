@@ -40,6 +40,16 @@ def require_teacher(user: User = Depends(get_current_user)) -> User:
         raise HTTPException(status_code=403, detail="Доступ только для преподавателей")
     return user
 
+
+def require_staff(user: User = Depends(get_current_user)) -> User:
+    """Преподаватель или администратор."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Доступ только для преподавателей и администраторов",
+        )
+    return user
+
 BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
@@ -95,9 +105,9 @@ def _user_to_dict(u: User) -> dict:
 @router.post("/register", response_model=TokenResponse)
 async def register(data: UserRegister, db: Session = Depends(get_db)):
     logger.info("register attempt email=%s role=%s", data.email, data.role)
-    if data.role not in ("student", "teacher"):
+    if data.role not in ("student", "teacher", "admin"):
         logger.warning("register rejected: invalid role=%s", data.role)
-        raise HTTPException(status_code=400, detail="Роль должна быть student или teacher")
+        raise HTTPException(status_code=400, detail="Роль должна быть student, teacher или admin")
     if db.query(User).filter(User.email == data.email).first():
         logger.warning("register rejected: email already exists email=%s", data.email)
         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")

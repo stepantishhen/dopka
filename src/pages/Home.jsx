@@ -12,6 +12,7 @@ const Home = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [availableExams, setAvailableExams] = useState([])
   const [examsLoading, setExamsLoading] = useState(false)
+  const [testEnv, setTestEnv] = useState(null)
 
   const filteredChats = chats.filter(chat =>
     chat.title.toLowerCase().includes(searchTerm.toLowerCase())
@@ -34,11 +35,16 @@ const Home = () => {
   }
 
   useEffect(() => {
-
     if (isStudent()) {
       loadAvailableExams()
     }
   }, [isStudent])
+
+  useEffect(() => {
+    api.getTestEnvironment()
+      .then((data) => setTestEnv(data))
+      .catch(() => setTestEnv(null))
+  }, [])
 
   const loadAvailableExams = async () => {
     try {
@@ -74,8 +80,38 @@ const Home = () => {
     }
   }
 
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+
   return (
     <Container fluid className="py-4">
+      {testEnv?.exam && (
+        <Alert variant="info" className="mb-3">
+          <Alert.Heading className="h6 mb-2">Тестовая среда</Alert.Heading>
+          <p className="mb-2 small">{testEnv.description}</p>
+          <ul className="small mb-2 ps-3">
+            <li>
+              Код экзамена: <strong>{testEnv.exam.join_code}</strong> —{' '}
+              <a href={`${origin}${testEnv.exam.join_path}`}>ссылка для студента</a>
+              {' · '}
+              <a href={`${origin}${testEnv.exam.exam_path}`}>прямо к экрану экзамена</a> (после входа)
+            </li>
+            <li>Вопросов в тестовом экзамене: {testEnv.exam.questions_count} (без генерации LLM)</li>
+            <li>Единиц в базе знаний (включая демо): {testEnv.knowledge_units_total}</li>
+          </ul>
+          {testEnv.accounts?.length > 0 && (
+            <div className="small">
+              <strong>Вход по email:</strong>
+              <ul className="mb-0 ps-3">
+                {testEnv.accounts.map((a) => (
+                  <li key={a.email}>
+                    {a.role}: <code>{a.email}</code> / <code>{a.password}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Alert>
+      )}
       <Row>
         <Col md={12} lg={4} xl={3} className="mb-4">
           <Card>

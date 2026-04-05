@@ -1,18 +1,13 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Container, Card, Button, Form, Table, Modal, InputGroup, Badge, Alert, Spinner } from 'react-bootstrap'
 import { useNavigate } from 'react-router-dom'
-import { useChat } from '../context/ChatContext'
 import api from '../services/api'
 
 const KnowledgeBase = () => {
   const navigate = useNavigate()
-  const {
-    knowledgeBase,
-    addKnowledgeItem,
-    updateKnowledgeItem,
-    deleteKnowledgeItem,
-    searchKnowledgeBase
-  } = useChat()
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [listError, setListError] = useState(null)
 
   const [showModal, setShowModal] = useState(false)
   const [showCreateExamModal, setShowCreateExamModal] = useState(false)
@@ -35,10 +30,42 @@ const KnowledgeBase = () => {
   const [examCreationError, setExamCreationError] = useState(null)
   const [examCreationSuccess, setExamCreationSuccess] = useState(null)
   const [activeTab, setActiveTab] = useState('text')
+  const [importBusy, setImportBusy] = useState(false)
+  const [lastExamLinks, setLastExamLinks] = useState(null)
+
+  const copyText = (text) => {
+    if (!text) return
+    navigator.clipboard?.writeText(text).catch(() => {})
+  }
+
+  const loadItems = useCallback(async () => {
+    try {
+      setLoading(true)
+      setListError(null)
+      const data = await api.getKnowledgeItems()
+      setItems(Array.isArray(data) ? data : [])
+    } catch (e) {
+      setListError(e.message || 'Не удалось загрузить базу знаний')
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadItems()
+  }, [loadItems])
 
   const filteredItems = searchTerm
-    ? searchKnowledgeBase(searchTerm)
-    : knowledgeBase
+    ? items.filter((item) => {
+        const q = searchTerm.toLowerCase()
+        return (
+          (item.title && item.title.toLowerCase().includes(q)) ||
+          (item.content && item.content.toLowerCase().includes(q)) ||
+          (item.tags && item.tags.some((t) => t.toLowerCase().includes(q)))
+        )
+      })
+    : items
 
   const handleShowModal = (item = null) => {
     if (item) {
@@ -72,33 +99,74 @@ const KnowledgeBase = () => {
     })
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const tagsArray = formData.tags
       .split(',')
       .map(tag => tag.trim())
       .filter(tag => tag.length > 0)
 
-    if (editingItem) {
-      updateKnowledgeItem(editingItem.id, {
-        title: formData.title,
-        content: formData.content,
-        tags: tagsArray,
-        category: formData.category
-      })
-    } else {
-      addKnowledgeItem({
-        title: formData.title,
-        content: formData.content,
-        tags: tagsArray,
-        category: formData.category
-      })
+    try {
+      if (editingItem) {
+        await api.updateKnowledgeItem(editingItem.id, {
+          title: formData.title,
+          content: formData.content,
+          tags: tagsArray,
+          category: formData.category
+        })
+      } else {
+        await api.createKnowledgeItem({
+          title: formData.title,
+          content: formData.content,
+          tags: tagsArray,
+          category: formData.category
+        })
+      }
+      await loadItems()
+      handleCloseModal()
+    } catch (e) {
+      alert(e.message || 'Ошибка сохранения')
     }
-    handleCloseModal()
   }
 
-  const handleDelete = (id, title) => {
-    if (window.confirm(`Вы уверены, что хотите удалить "${title}"?`)) {
-      deleteKnowledgeItem(id)
+  const handleDelete = async (id, title) => {
+    if (!window.confirm(`Вы уверены, что хотите удалить "${title}"?`)) return
+    try {
+      await api.deleteKnowledgeItem(id)
+      await loadItems()
+    } catch (e) {
+      alert(e.message || 'Ошибка удаления')
+    }
+  }
+
+  const handleImportToKbPdf = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImportBusy(true)
+    try {
+      await api.extractFromPDF(file)
+      await loadItems()
+      alert('Материалы из PDF добавлены в базу знаний.')
+    } catch (err) {
+      alert(err.message || 'Ошибка импорта PDF')
+    } finally {
+      setImportBusy(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleImportToKbDocx = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImportBusy(true)
+    try {
+      await api.extractFromDOCX(file)
+      await loadItems()
+      alert('Материалы из DOCX добавлены в базу знаний.')
+    } catch (err) {
+      alert(err.message || 'Ошибка импорта DOCX')
+    } finally {
+      setImportBusy(false)
+      e.target.value = ''
     }
   }
 
@@ -121,15 +189,15 @@ const KnowledgeBase = () => {
         examFormData.adaptive
       )
 
-      setExamCreationSuccess(`Экзамен "${exam.config.name}" успешно создан! ID: ${exam.exam_id}`)
-      
-      setTimeout(() => {
-        setShowCreateExamModal(false)
-        setExamFormData({ name: '', text: '', numQuestions: 10, adaptive: true })
-        setExamCreationSuccess(null)
-
-        alert(`Экзамен создан! Студенты могут начать его прохождение.`)
-      }, 2000)
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      setLastExamLinks({
+        name: exam.config?.name,
+        examId: exam.exam_id,
+        joinCode: exam.join_code,
+        joinUrl: exam.join_path ? `${origin}${exam.join_path}` : '',
+        examUrl: exam.exam_path ? `${origin}${exam.exam_path}` : '',
+      })
+      setExamCreationSuccess(`Экзамен «${exam.config.name}» создан. Скопируйте ссылку для студентов ниже.`)
     } catch (error) {
       setExamCreationError(error.message || 'Ошибка при создании экзамена')
     } finally {
@@ -155,19 +223,49 @@ const KnowledgeBase = () => {
         examFormData.adaptive
       )
 
-      setExamCreationSuccess(`Экзамен "${exam.config.name}" успешно создан! ID: ${exam.exam_id}`)
-      
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      setLastExamLinks({
+        name: exam.config?.name,
+        examId: exam.exam_id,
+        joinCode: exam.join_code,
+        joinUrl: exam.join_path ? `${origin}${exam.join_path}` : '',
+        examUrl: exam.exam_path ? `${origin}${exam.exam_path}` : '',
+      })
+      setExamCreationSuccess(`Экзамен «${exam.config.name}» создан. Скопируйте ссылку для студентов ниже.`)
+    } catch (error) {
+      setExamCreationError(error.message || 'Ошибка при создании экзамена')
+    } finally {
+      setIsCreatingExam(false)
+    }
+  }
 
-      setTimeout(() => {
-        setShowCreateExamModal(false)
-        setExamFormData({ name: '', text: '', numQuestions: 10, adaptive: true })
-        setSelectedFile(null)
-        setExamCreationSuccess(null)
+  const handleCreateExamFromDOCX = async () => {
+    if (!examFormData.name || !selectedFile) {
+      setExamCreationError('Заполните название и выберите DOCX файл')
+      return
+    }
 
-        if (window.confirm(`Экзамен "${exam.config.name}" успешно создан! Перейти к списку экзаменов?`)) {
-          navigate('/exams')
-        }
-      }, 2000)
+    setIsCreatingExam(true)
+    setExamCreationError(null)
+    setExamCreationSuccess(null)
+
+    try {
+      const exam = await api.createExamFromDOCX(
+        selectedFile,
+        examFormData.name,
+        examFormData.numQuestions,
+        examFormData.adaptive
+      )
+
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      setLastExamLinks({
+        name: exam.config?.name,
+        examId: exam.exam_id,
+        joinCode: exam.join_code,
+        joinUrl: exam.join_path ? `${origin}${exam.join_path}` : '',
+        examUrl: exam.exam_path ? `${origin}${exam.exam_path}` : '',
+      })
+      setExamCreationSuccess(`Экзамен «${exam.config.name}» создан. Скопируйте ссылку для студентов ниже.`)
     } catch (error) {
       setExamCreationError(error.message || 'Ошибка при создании экзамена')
     } finally {
@@ -178,13 +276,22 @@ const KnowledgeBase = () => {
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (file) {
-      if (file.type !== 'application/pdf') {
+      const okPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      const okDocx =
+        file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        file.name.toLowerCase().endsWith('.docx')
+      if (activeTab === 'pdf' && !okPdf) {
         setExamCreationError('Пожалуйста, выберите PDF файл')
+        return
+      }
+      if (activeTab === 'docx' && !okDocx) {
+        setExamCreationError('Пожалуйста, выберите DOCX файл')
         return
       }
       setSelectedFile(file)
       if (!examFormData.name) {
-        setExamFormData({ ...examFormData, name: file.name.replace('.pdf', '') })
+        const base = file.name.replace(/\.(pdf|docx)$/i, '')
+        setExamFormData({ ...examFormData, name: base })
       }
     }
   }
@@ -193,7 +300,7 @@ const KnowledgeBase = () => {
     <Container className="py-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h2>База знаний</h2>
-        <div className="d-flex gap-2">
+        <div className="d-flex gap-2 flex-wrap">
           <Button variant="success" onClick={() => setShowCreateExamModal(true)}>
             📝 Создать экзамен из материалов
           </Button>
@@ -202,6 +309,38 @@ const KnowledgeBase = () => {
           </Button>
         </div>
       </div>
+
+      <Card className="mb-4">
+        <Card.Body>
+          <Card.Title as="h6">Импорт в базу знаний (PDF / DOCX)</Card.Title>
+          <p className="text-muted small mb-2">
+            Текст извлекается на сервере; дидактические единицы добавляются в базу через LLM.
+          </p>
+          <div className="d-flex flex-wrap gap-2 align-items-center">
+            <Form.Control
+              type="file"
+              accept=".pdf,application/pdf"
+              disabled={importBusy}
+              onChange={handleImportToKbPdf}
+              style={{ maxWidth: 280 }}
+            />
+            <Form.Control
+              type="file"
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              disabled={importBusy}
+              onChange={handleImportToKbDocx}
+              style={{ maxWidth: 280 }}
+            />
+            {importBusy && <Spinner animation="border" size="sm" />}
+          </div>
+        </Card.Body>
+      </Card>
+
+      {listError && (
+        <Alert variant="warning" className="mb-3">
+          {listError}
+        </Alert>
+      )}
 
       <InputGroup className="mb-4">
         <Form.Control
@@ -212,11 +351,15 @@ const KnowledgeBase = () => {
         />
       </InputGroup>
 
-      {filteredItems.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-5">
+          <Spinner animation="border" />
+        </div>
+      ) : filteredItems.length === 0 ? (
         <Alert variant="info" className="text-center">
           {searchTerm
             ? 'Материалы не найдены'
-            : 'База знаний пуста. Добавьте первый материал!'}
+            : 'База знаний пуста. Добавьте первый материал или импортируйте PDF/DOCX.'}
         </Alert>
       ) : (
         <Table striped bordered hover responsive>
@@ -364,7 +507,16 @@ const KnowledgeBase = () => {
         </Modal.Footer>
       </Modal>
 
-      <Modal show={showCreateExamModal} onHide={() => setShowCreateExamModal(false)} size="lg">
+      <Modal
+        show={showCreateExamModal}
+        onHide={() => {
+          setShowCreateExamModal(false)
+          setLastExamLinks(null)
+          setExamCreationSuccess(null)
+          setExamCreationError(null)
+        }}
+        size="lg"
+      >
         <Modal.Header closeButton>
           <Modal.Title>Создать экзамен из материалов</Modal.Title>
         </Modal.Header>
@@ -379,20 +531,73 @@ const KnowledgeBase = () => {
               {examCreationSuccess}
             </Alert>
           )}
+          {lastExamLinks && (
+            <Alert variant="info" className="small">
+              <div className="fw-semibold mb-2">Для студентов</div>
+              <div className="mb-1">
+                Код: <code>{lastExamLinks.joinCode}</code>
+              </div>
+              {lastExamLinks.joinUrl && (
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
+                  <span className="text-break">{lastExamLinks.joinUrl}</span>
+                  <Button size="sm" variant="outline-primary" onClick={() => copyText(lastExamLinks.joinUrl)}>
+                    Копировать ссылку
+                  </Button>
+                </div>
+              )}
+              {lastExamLinks.examUrl && (
+                <div className="d-flex flex-wrap align-items-center gap-2 mt-2">
+                  <span className="text-muted">Прямая ссылка на экран экзамена (после входа):</span>
+                  <Button size="sm" variant="outline-secondary" onClick={() => copyText(lastExamLinks.examUrl)}>
+                    Копировать
+                  </Button>
+                </div>
+              )}
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    setShowCreateExamModal(false)
+                    setLastExamLinks(null)
+                    navigate('/exams')
+                  }}
+                >
+                  К списку экзаменов
+                </Button>
+              </div>
+            </Alert>
+          )}
 
           <div className="mb-3">
             <Button
               variant={activeTab === 'text' ? 'primary' : 'outline-primary'}
               className="me-2"
-              onClick={() => setActiveTab('text')}
+              onClick={() => {
+                setActiveTab('text')
+                setSelectedFile(null)
+              }}
             >
               Из текста
             </Button>
             <Button
               variant={activeTab === 'pdf' ? 'primary' : 'outline-primary'}
-              onClick={() => setActiveTab('pdf')}
+              onClick={() => {
+                setActiveTab('pdf')
+                setSelectedFile(null)
+              }}
             >
               Из PDF
+            </Button>
+            <Button
+              variant={activeTab === 'docx' ? 'primary' : 'outline-primary'}
+              className="ms-2"
+              onClick={() => {
+                setActiveTab('docx')
+                setSelectedFile(null)
+              }}
+            >
+              Из DOCX
             </Button>
           </div>
 
@@ -455,7 +660,7 @@ const KnowledgeBase = () => {
             </div>
           )}
 
-          {activeTab === 'pdf' && (
+          {(activeTab === 'pdf' || activeTab === 'docx') && (
             <div>
               <Form>
                 <Form.Group className="mb-3">
@@ -472,15 +677,17 @@ const KnowledgeBase = () => {
                 </Form.Group>
 
                 <Form.Group className="mb-3">
-                  <Form.Label>PDF файл *</Form.Label>
+                  <Form.Label>{activeTab === 'pdf' ? 'PDF' : 'DOCX'} файл *</Form.Label>
                   <Form.Control
                     type="file"
-                    accept=".pdf"
+                    accept={activeTab === 'pdf' ? '.pdf' : '.docx'}
                     onChange={handleFileChange}
                     required
                   />
                   <Form.Text className="text-muted">
-                    Загрузите PDF файл с учебным материалом. Система извлечет текст и создаст экзамен.
+                    {activeTab === 'pdf'
+                      ? 'Загрузите PDF: текст извлекается на сервере, затем формируется экзамен.'
+                      : 'Загрузите DOCX: текст извлекается на сервере, затем формируется экзамен.'}
                   </Form.Text>
                   {selectedFile && (
                     <Alert variant="info" className="mt-2">
@@ -521,8 +728,19 @@ const KnowledgeBase = () => {
           </Button>
           <Button
             variant="success"
-            onClick={selectedFile ? handleCreateExamFromPDF : handleCreateExamFromText}
-            disabled={isCreatingExam || (!examFormData.name || (!examFormData.text && !selectedFile))}
+            onClick={
+              activeTab === 'text'
+                ? handleCreateExamFromText
+                : activeTab === 'pdf'
+                  ? handleCreateExamFromPDF
+                  : handleCreateExamFromDOCX
+            }
+            disabled={
+              isCreatingExam ||
+              !examFormData.name ||
+              (activeTab === 'text' && !examFormData.text) ||
+              ((activeTab === 'pdf' || activeTab === 'docx') && !selectedFile)
+            }
           >
             {isCreatingExam ? (
               <>

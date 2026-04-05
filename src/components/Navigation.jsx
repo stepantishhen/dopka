@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext'
 const Navigation = () => {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, isTeacher, logout } = useAuth()
+  const { user, isStaff, isTeacher, isAdmin, logout } = useAuth()
 
   const handleLogout = () => {
     logout()
@@ -29,7 +29,7 @@ const Navigation = () => {
             <Nav.Link as={Link} to="/" active={location.pathname === '/'}>
               Главная
             </Nav.Link>
-            {isTeacher() && (
+            {isStaff() && (
               <>
                 <Nav.Link
                   as={Link}
@@ -54,6 +54,9 @@ const Navigation = () => {
                 </Nav.Link>
               </>
             )}
+            <Nav.Link as={Link} to="/join" active={location.pathname.startsWith('/join')}>
+              Войти по коду
+            </Nav.Link>
             <Nav.Link as={Link} to="/history" active={location.pathname === '/history'}>
               История
             </Nav.Link>
@@ -63,8 +66,8 @@ const Navigation = () => {
           </Nav>
           <Nav>
             <Navbar.Text className="me-3">
-              <Badge bg={isTeacher() ? 'success' : 'primary'}>
-                {isTeacher() ? 'Преподаватель' : 'Студент'}
+              <Badge bg={isStaff() ? 'success' : 'primary'}>
+                {isAdmin() ? 'Администратор' : isTeacher() ? 'Преподаватель' : 'Студент'}
               </Badge>
               {user.name && <span className="ms-2">{user.name}</span>}
             </Navbar.Text>

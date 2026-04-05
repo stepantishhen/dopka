@@ -43,6 +43,10 @@ class SessionState(BaseModel):
     knowledge_gaps: List[str] = Field(default_factory=list)
     current_tactic: Optional[DialogueTactic] = None
     current_simplification_level: int = 0
+    # Входной тест (MCQ): pretest → dialogue после POST .../pretest
+    exam_flow_phase: str = "dialogue"
+    pretest_completed: bool = True
+    weak_question_ids: List[str] = Field(default_factory=list)
 
 
 class AgentRequest(BaseModel):

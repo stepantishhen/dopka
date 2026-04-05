@@ -7,7 +7,6 @@ from datetime import datetime
 
 from backend.models.exam_system import Exam, ExamConfig, StudentAnswer, StudentProfile, EmotionalState
 from backend.services.knowledge_service import KnowledgeService
-from backend.services.llm_client import LLMClient
 
 logger = logging.getLogger("exam_system.exam_service")
 
@@ -17,50 +16,89 @@ TEST_JOIN_CODE = "TEST01"
 TEST_EXAM_QUESTIONS = [
     {
         "question_id": "q_test_1",
+        "topic": "Переменные и память",
         "question": "Что такое переменная в программировании?",
         "type": "understanding",
         "difficulty": 0.3,
         "criteria": [{"name": "Определение", "max_score": 5}, {"name": "Пример", "max_score": 5}],
         "reference_answer": "Переменная - именованная область памяти, хранящая значение.",
+        "choices": [
+            "Именованная область памяти для хранения значения",
+            "Константа, которую нельзя изменить после создания",
+            "Только целое число",
+            "Имя файла с исходным кодом",
+        ],
+        "correct_choice": 0,
     },
     {
         "question_id": "q_test_2",
-        "question": "Опишите разницу между list и tuple в Python.",
+        "topic": "Структуры данных",
+        "question": "В чём главное отличие list от tuple в Python?",
         "type": "understanding",
         "difficulty": 0.5,
         "criteria": [{"name": "Изменяемость", "max_score": 5}, {"name": "Синтаксис", "max_score": 5}],
         "reference_answer": "List изменяемый, tuple неизменяемый. List использует [], tuple (.",
+        "choices": [
+            "Список (list) можно изменять, кортеж (tuple) — нет",
+            "Отличий нет, это синонимы",
+            "tuple всегда короче list",
+            "list можно использовать только для строк",
+        ],
+        "correct_choice": 0,
     },
     {
         "question_id": "q_test_3",
-        "question": "Напишите цикл для вывода чисел от 1 до 10 в Python.",
+        "topic": "Циклы",
+        "question": "Какой фрагмент корректно выводит числа от 1 до 10 в Python?",
         "type": "application",
         "difficulty": 0.4,
         "criteria": [{"name": "Синтаксис цикла", "max_score": 5}, {"name": "Корректный вывод", "max_score": 5}],
         "reference_answer": "for i in range(1, 11): print(i)",
+        "choices": [
+            "for i in range(1, 11): print(i)",
+            "for i in range(10): print(i)",
+            "print(list(1, 10))",
+            "for i in 1..10: print(i)",
+        ],
+        "correct_choice": 0,
     },
     {
         "question_id": "q_test_4",
-        "question": "Объясните, что такое рекурсия и приведите пример.",
+        "topic": "Рекурсия",
+        "question": "Что верно про рекурсию?",
         "type": "analysis",
         "difficulty": 0.6,
         "criteria": [{"name": "Определение", "max_score": 5}, {"name": "Базовый случай", "max_score": 5}],
         "reference_answer": "Рекурсия - вызов функцией самой себя. Базовый случай обязателен.",
+        "choices": [
+            "Функция может вызывать сама себя; нужен базовый случай остановки",
+            "Рекурсия запрещена в Python",
+            "Это только синоним цикла while",
+            "Глубина рекурсии не ограничена интерпретатором",
+        ],
+        "correct_choice": 0,
     },
     {
         "question_id": "q_test_5",
-        "question": "Что выведет print(type([])) в Python?",
+        "topic": "Типы",
+        "question": "Что выведет print(type([])) в Python 3?",
         "type": "understanding",
         "difficulty": 0.2,
         "criteria": [{"name": "Правильный тип", "max_score": 10}],
         "reference_answer": "<class 'list'>",
+        "choices": [
+            "<class 'list'>",
+            "list",
+            "array",
+            "TypeError",
+        ],
+        "correct_choice": 0,
     },
 ]
 
 
 class ExamService:
     def __init__(self, knowledge_service: KnowledgeService):
-        self.llm = LLMClient()
         self.knowledge_service = knowledge_service
         self.exams: Dict[str, Exam] = {}
         self.current_exam: Optional[Exam] = None
@@ -223,24 +261,40 @@ class ExamService:
     def get_current_exam(self) -> Optional[Exam]:
         return self.current_exam
     
-    def evaluate_student_answers(self, student_id: str, answers: List[StudentAnswer]) -> Dict:
+    def _resolve_question(self, question_id: str, exam: Optional[Exam]) -> Optional[Dict]:
+        if exam and getattr(exam, "questions", None):
+            for q in exam.questions:
+                if isinstance(q, dict) and q.get("question_id") == question_id:
+                    return q
+        return self.knowledge_service.find_question_by_id(question_id)
+
+    def evaluate_student_answers(
+        self,
+        student_id: str,
+        answers: List[StudentAnswer],
+        exam: Optional[Exam] = None,
+    ) -> Dict:
         total_score = 0
         max_score = 0
         evaluations = []
         knowledge_gaps = []
         
         for answer in answers:
-            question = None
-            for q in self.knowledge_service.questions_db:
-                if q.get("question_id") == answer.question_id:
-                    question = q
-                    break
+            question = self._resolve_question(answer.question_id, exam)
             
             if question:
                 evaluation = self._evaluate_single_answer(question, answer.answer)
                 evaluations.append(evaluation)
                 total_score += evaluation.get("score", 0)
                 max_score += sum(c.get("max_score", 1) for c in question.get("criteria", []))
+            else:
+                evaluations.append({
+                    "score": 0,
+                    "max_score": 0,
+                    "overall_feedback": f"Вопрос не найден: {answer.question_id}",
+                    "errors": ["unknown_question"],
+                })
+                knowledge_gaps.append(answer.question_id)
         
         report = {
             "student_id": student_id,
@@ -268,53 +322,37 @@ class ExamService:
         return report
     
     def _evaluate_single_answer(self, question: Dict, answer: str) -> Dict:
-        system_prompt = "Ты эксперт-преподаватель, оценивающий ответы студентов. Оценивай объективно и конструктивно."
-        user_prompt = f"""Вопрос: {question.get('question', '')}
-Критерии: {json.dumps(question.get('criteria', []), ensure_ascii=False)}
-Эталонный ответ: {question.get('reference_answer', 'Не предоставлен')}
-Ответ студента: {answer}
+        from backend.services.answer_scoring import get_answer_scoring_service
 
-Оцени ответ. Формат ответа ТОЛЬКО JSON:
-{{
-    "score": 8.5,
-    "max_score": 10,
-    "criteria_scores": [],
-    "overall_feedback": "Обратная связь",
-    "errors": [],
-    "strengths": [],
-    "improvement_suggestions": []
-}}"""
-        
+        criteria = question.get("criteria", [])
+        max_q = sum(float(c.get("max_score", 0) or 0) for c in criteria) if criteria else 10.0
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=1000)
-            
-            data = self.safe_parse_json(response_text)
-            if data:
-                return data
-            
+            ev = get_answer_scoring_service().compare_and_score(
+                question=str(question.get("question", "")),
+                reference_answer=str(question.get("reference_answer", "") or ""),
+                student_answer=str(answer or ""),
+                criteria=criteria if isinstance(criteria, list) else [],
+                max_for_question=max_q,
+            )
             return {
-                "score": 0,
-                "max_score": 10,
-                "criteria_scores": [],
-                "overall_feedback": "Не удалось оценить ответ",
+                "score": ev.get("score", 0),
+                "max_score": max_q,
+                "criteria_scores": ev.get("criteria_scores", []),
+                "overall_feedback": ev.get("overall_feedback", ""),
                 "errors": [],
                 "strengths": [],
-                "improvement_suggestions": []
+                "improvement_suggestions": [],
             }
         except Exception as e:
-            print(f"Ошибка при оценке ответа: {e}")
+            logger.exception("_evaluate_single_answer: %s", e)
             return {
                 "score": 0,
-                "max_score": 10,
+                "max_score": max_q,
                 "criteria_scores": [],
                 "overall_feedback": f"Ошибка при оценке: {str(e)}",
                 "errors": [],
                 "strengths": [],
-                "improvement_suggestions": []
+                "improvement_suggestions": [],
             }
     
     def get_or_create_student(self, student_id: str, name: str = "", group: str = "") -> StudentProfile:

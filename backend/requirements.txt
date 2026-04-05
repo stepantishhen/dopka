@@ -9,6 +9,7 @@ sentence-transformers
 numpy
 networkx
 pdfplumber
+python-docx
 aiofiles
 requests
 pydantic-settings

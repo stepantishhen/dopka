@@ -3,13 +3,13 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 const ProtectedRoute = ({ children, requireTeacher = false }) => {
-  const { user, isTeacher } = useAuth()
+  const { user, isStaff } = useAuth()
 
   if (!user) {
     return <Navigate to="/login" replace />
   }
 
-  if (requireTeacher && !isTeacher()) {
+  if (requireTeacher && !isStaff()) {
     return <Navigate to="/" replace />
   }
 

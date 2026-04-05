@@ -19,6 +19,20 @@ class SessionResponse(BaseModel):
     max_total_score: Optional[float] = None
     questions_answered: Optional[int] = None
     passed: Optional[bool] = None
+    exam_flow_phase: Optional[str] = None
+    pretest_completed: Optional[bool] = None
+
+
+class PretestSubmission(BaseModel):
+    choices: Dict[str, int] = Field(default_factory=dict)
+
+
+class PretestCompleteResponse(BaseModel):
+    pretest_completed: bool
+    per_question: Dict[str, bool] = Field(default_factory=dict)
+    strong_topics: List[Dict[str, Any]] = Field(default_factory=list)
+    weak_topics: List[Dict[str, Any]] = Field(default_factory=list)
+    weak_question_ids: List[str] = Field(default_factory=list)
 
 
 class SessionCompleteResponse(BaseModel):

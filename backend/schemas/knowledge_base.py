@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from backend.models.didactic_unit import DidacticUnit
 
 
@@ -39,6 +39,8 @@ class DidacticUnitCreate(BaseModel):
 
 
 class DidacticUnitResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
     unit_id: str
     title: str
     content_type: str
@@ -49,7 +51,4 @@ class DidacticUnitResponse(BaseModel):
     related_units: List[str]
     difficulty_level: float
     metadata: dict
-    
-    class Config:
-        from_attributes = True
 

@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Optional, Type, TypeVar
+from typing import List, Dict, Optional, Tuple, Type, TypeVar
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -29,6 +29,38 @@ class LLMClient:
                 kwargs["base_url"] = self.base_url
             self._client = OpenAI(**kwargs)
         return self._client
+
+    def has_credentials(self) -> bool:
+        key = (self.api_key or "").strip()
+        return bool(key) and key != "placeholder"
+
+    def check_connection(self) -> Tuple[bool, str]:
+        """
+        Минимальный запрос к Chat Completions (OpenAI-совместимый API).
+        Возвращает (успех, сообщение для логов).
+        """
+        if not self.has_credentials():
+            return False, "не заданы OPENAI_API_KEY или GIGACHAT_CREDENTIALS"
+        model_name = self.model
+        base = self.base_url or "(OpenAI по умолчанию)"
+        try:
+            logger.info(
+                "LLM: проверка соединения model=%s base_url=%s",
+                model_name,
+                base,
+            )
+            r = self.client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": "."}],
+                max_tokens=1,
+                temperature=0,
+            )
+            rid = getattr(r, "id", None) or ""
+            return True, f"ответ получен (model={model_name}, id={rid[:20]}…)" if rid else f"ответ получен (model={model_name})"
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            logger.exception("LLM: проверка не удалась")
+            return False, err
 
     def chat(
         self,

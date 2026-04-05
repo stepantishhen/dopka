@@ -5,6 +5,15 @@ import { useExamSession } from '../context/ExamSessionContext'
 import { useAuth } from '../context/AuthContext'
 import api from '../services/api'
 
+/** Все вопросы экзамена с вариантами — включается входной тест и приветствие. */
+function examHasFullMcqPretest(exam) {
+  const qs = exam?.questions
+  if (!qs?.length) return false
+  return qs.every(
+    (q) => Array.isArray(q.choices) && q.choices.length >= 2 && q.correct_choice != null
+  )
+}
+
 const ExamSession = ({ examId }) => {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -21,7 +30,14 @@ const ExamSession = ({ examId }) => {
     completeSession,
     fetchSessionStatus,
     endSession,
+    loadDialogueHistory,
   } = useExamSession()
+
+  const [flowPhase, setFlowPhase] = useState('dialogue')
+  const [pretestResult, setPretestResult] = useState(null)
+  const [mcqIndex, setMcqIndex] = useState(0)
+  const [mcqChoices, setMcqChoices] = useState({})
+  const [pretestSubmitting, setPretestSubmitting] = useState(false)
 
   const [answer, setAnswer] = useState('')
   const [evaluation, setEvaluation] = useState(null)
@@ -133,13 +149,23 @@ const ExamSession = ({ examId }) => {
       if (!currentSession && user) {
         try {
           await createSession(user.id || `student_${Date.now()}`, examId)
-          if (!examData.questions?.length) {
-            const examConfig = {
-              num_questions: examData.config?.num_questions || 10,
-              adaptive: examData.config?.adaptive !== false,
-              unit_ids: examData.config?.unit_ids || null,
-            }
+          const examConfig = {
+            num_questions: examData.config?.num_questions || 10,
+            adaptive: examData.config?.adaptive !== false,
+            unit_ids: examData.config?.unit_ids || null,
+          }
+          const hasQ = examData.questions?.length > 0
+          const adaptive = examData.config?.adaptive !== false
+          await loadDialogueHistory()
+
+          if (examHasFullMcqPretest(examData)) {
+            setFlowPhase('intro')
+            setMcqIndex(0)
+            setMcqChoices({})
+            setPretestResult(null)
+          } else if (hasQ || adaptive) {
             await loadNextQuestion(examConfig)
+            setFlowPhase('dialogue')
           }
         } catch (sessionErr) {
           console.error('Failed to create session:', sessionErr)
@@ -184,6 +210,64 @@ const ExamSession = ({ examId }) => {
     } catch (err) {
       console.error('Failed to submit answer:', err)
       alert(`Ошибка при отправке ответа: ${err.message}`)
+    }
+  }
+
+  const startMcqPretest = () => setFlowPhase('mcq')
+
+  const submitPretest = async () => {
+    if (!currentSession?.session_id || !exam?.questions?.length) return
+    const ids = exam.questions.map((q) => String(q.question_id || q.id))
+    for (const id of ids) {
+      if (mcqChoices[id] === undefined) {
+        alert('Ответьте на все вопросы входного теста')
+        return
+      }
+    }
+    setPretestSubmitting(true)
+    try {
+      const numericChoices = {}
+      Object.entries(mcqChoices).forEach(([k, v]) => {
+        numericChoices[k] = typeof v === 'number' ? v : parseInt(v, 10)
+      })
+      const out = await api.completePretest(currentSession.session_id, numericChoices)
+      setPretestResult(out)
+      setFlowPhase('topics')
+    } catch (e) {
+      console.error(e)
+      alert(e.message || 'Не удалось завершить входной тест')
+    } finally {
+      setPretestSubmitting(false)
+    }
+  }
+
+  const handleMcqNext = () => {
+    const qs = exam?.questions
+    if (!qs?.length) return
+    const q = qs[mcqIndex]
+    const qid = String(q.question_id || q.id)
+    if (mcqChoices[qid] === undefined) return
+    if (mcqIndex < qs.length - 1) {
+      setMcqIndex((i) => i + 1)
+    } else {
+      submitPretest()
+    }
+  }
+
+  const startDialoguePhase = async () => {
+    const examConfig = exam
+      ? {
+          num_questions: exam.config?.num_questions || 10,
+          adaptive: exam.config?.adaptive !== false,
+          unit_ids: exam.config?.unit_ids || null,
+        }
+      : { num_questions: 10, adaptive: true, unit_ids: null }
+    try {
+      await loadNextQuestion(examConfig)
+      setFlowPhase('dialogue')
+    } catch (e) {
+      console.error(e)
+      alert(e.message || 'Не удалось начать этап диалога')
     }
   }
 
@@ -305,6 +389,12 @@ const ExamSession = ({ examId }) => {
   )
   const scorePercent = runningScore.max > 0 ? Math.round((runningScore.score / runningScore.max) * 100) : null
 
+  const hasMcqExam = !!(exam && examHasFullMcqPretest(exam))
+  const mcqQ = exam?.questions?.[mcqIndex]
+  const mcqN = exam?.questions?.length ?? 0
+  const mcqStages = hasMcqExam && ['intro', 'mcq', 'topics'].includes(flowPhase)
+  const showDialogueChat = !hasMcqExam || flowPhase === 'intro' || flowPhase === 'dialogue'
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -337,35 +427,62 @@ const ExamSession = ({ examId }) => {
           }}
         >
           <h6 className="text-muted mb-3 small text-uppercase">Для вас</h6>
-          <div className="mb-3">
-            <div className="fw-semibold">Прогресс</div>
-            <div className="small text-secondary">
-              Вопрос {questionCount} из {totalQuestions ?? '—'}
-            </div>
-          </div>
-          <div className="mb-3">
-            <div className="fw-semibold">Текущий набранный балл</div>
-            <div className="small">
-              {runningScore.max > 0 ? (
-                <>
-                  <strong>{displayedScore}</strong> из {displayedMax}
-                  {displayedMax > 0 && (
-                    <span className={scorePercent != null && scorePercent >= 56 ? 'text-success' : 'text-secondary'}>
-                      {' '}({scorePercent ?? 0}%)
-                    </span>
+          {mcqStages ? (
+            <>
+              <div className="mb-3">
+                <div className="fw-semibold">Этап</div>
+                <div className="small text-secondary">
+                  {flowPhase === 'intro' && 'Приветствие и инструкция'}
+                  {flowPhase === 'mcq' && `Входной тест: вопрос ${mcqIndex + 1} из ${mcqN}`}
+                  {flowPhase === 'topics' && 'Сводка по темам'}
+                </div>
+              </div>
+              <div className="mb-2 fw-semibold small">Подсказки</div>
+              <ul className="small text-secondary ps-3 mb-0" style={{ lineHeight: 1.6 }}>
+                {flowPhase === 'intro' && <li>Система сама начинает диалог — прочитайте сообщение и начните тест.</li>}
+                {flowPhase === 'mcq' && (
+                  <>
+                    <li>Выберите один вариант ответа</li>
+                    <li>Это поможет упорядочить темы для дальнейшего диалога</li>
+                  </>
+                )}
+                {flowPhase === 'topics' && <li>Ниже — темы, которые стоит подтянуть, и те, где вы увереннее.</li>}
+              </ul>
+            </>
+          ) : (
+            <>
+              <div className="mb-3">
+                <div className="fw-semibold">Прогресс</div>
+                <div className="small text-secondary">
+                  Вопрос {questionCount} из {totalQuestions ?? '—'}
+                </div>
+              </div>
+              <div className="mb-3">
+                <div className="fw-semibold">Текущий набранный балл</div>
+                <div className="small">
+                  {runningScore.max > 0 ? (
+                    <>
+                      <strong>{displayedScore}</strong> из {displayedMax}
+                      {displayedMax > 0 && (
+                        <span className={scorePercent != null && scorePercent >= 56 ? 'text-success' : 'text-secondary'}>
+                          {' '}({scorePercent ?? 0}%)
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-secondary">{displayedScore}</span>
                   )}
-                </>
-              ) : (
-                <span className="text-secondary">{displayedScore}</span>
-              )}
-            </div>
-          </div>
-          <div className="mb-2 fw-semibold small">Подсказки</div>
-          <ul className="small text-secondary ps-3 mb-0" style={{ lineHeight: 1.6 }}>
-            <li>Отвечайте развёрнуто, своими словами</li>
-            <li>Проходной балл — 56</li>
-            <li>При ошибке можно ответить на уточняющий вопрос</li>
-          </ul>
+                </div>
+              </div>
+              <div className="mb-2 fw-semibold small">Подсказки</div>
+              <ul className="small text-secondary ps-3 mb-0" style={{ lineHeight: 1.6 }}>
+                <li>Отвечайте развёрнуто, своими словами</li>
+                <li>Можно сослаться на практику, проекты или опыт — это учитывается в аналитике</li>
+                <li>Проходной балл — 56</li>
+                <li>При ошибке система даст подсказку и уточняющий вопрос</li>
+              </ul>
+            </>
+          )}
         </aside>
 
         <div
@@ -378,100 +495,235 @@ const ExamSession = ({ examId }) => {
           >
             <div style={{ width: '100%', maxWidth: '720px' }}>
               {error && <Alert variant="danger" dismissible>{error}</Alert>}
-              {allMessages.length === 0 ? (
-                <div className="text-center text-muted py-5">
-                  <h5>Начало экзамена</h5>
-                  <p>Ответьте на вопрос в поле ниже</p>
+
+              {flowPhase === 'topics' && pretestResult && (
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <h5 className="mb-3">Сводка по темам</h5>
+                  <p className="text-muted small mb-4">
+                    Ниже — темы, где ответы совпали с ключом, и темы, которые лучше проработать в диалоге.
+                    Дальше вы перейдёте к развёрнутым ответам: система подскажет, пока ответ не будет засчитан верным.
+                  </p>
+                  <Row className="g-3 mb-2">
+                    <Col md={6}>
+                      <div className="p-3 rounded border border-success bg-success bg-opacity-10 h-100">
+                        <div className="fw-semibold text-success mb-2">Сейчас увереннее</div>
+                        {pretestResult.strong_topics?.length ? (
+                          <ul className="small mb-0 ps-3">
+                            {pretestResult.strong_topics.map((t) => (
+                              <li key={t.topic}>
+                                {t.topic} ({t.correct}/{t.total})
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="small text-muted mb-0">Нет тем без ошибок во входном тесте</p>
+                        )}
+                      </div>
+                    </Col>
+                    <Col md={6}>
+                      <div className="p-3 rounded border border-warning bg-warning bg-opacity-10 h-100">
+                        <div className="fw-semibold text-dark mb-2">Стоит подтянуть</div>
+                        {pretestResult.weak_topics?.length ? (
+                          <ul className="small mb-0 ps-3">
+                            {pretestResult.weak_topics.map((t) => (
+                              <li key={t.topic}>
+                                {t.topic} ({t.correct}/{t.total})
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="small text-muted mb-0">Отлично: по всем темам верные ответы</p>
+                        )}
+                      </div>
+                    </Col>
+                  </Row>
                 </div>
-              ) : (
-                <div className="d-flex flex-column gap-3">
-                  {allMessages.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className={`d-flex ${msg.sender === 'user' ? 'justify-content-end' : 'justify-content-start'}`}
-                    >
-                      <div
-                        className={`p-3 rounded ${
-                          msg.sender === 'user'
-                            ? 'bg-primary text-white'
-                            : msg.type === 'question'
-                            ? 'bg-white border border-primary'
-                            : 'bg-white border'
-                        }`}
-                        style={{ maxWidth: '85%' }}
-                      >
-                        {msg.type === 'question' && (
-                          <Badge bg="info" className="mb-1" style={{ fontSize: '0.65rem' }}>
-                            Вопрос
-                          </Badge>
-                        )}
-                        <div className="mb-1">{msg.text}</div>
-                        {msg.tactic && (
-                          <Badge bg="secondary" className="me-1" style={{ fontSize: '0.65rem' }}>{msg.tactic}</Badge>
-                        )}
-                        <small
-                          className={`d-block mt-1 ${msg.sender === 'user' ? 'text-white-50' : 'text-muted'}`}
-                          style={{ fontSize: '0.7rem' }}
+              )}
+
+              {flowPhase === 'mcq' && mcqQ && (
+                <div className="bg-white border rounded p-4 shadow-sm">
+                  <Badge bg="secondary" className="mb-2">
+                    Входной тест · {mcqIndex + 1} / {mcqN}
+                  </Badge>
+                  {mcqQ.topic && (
+                    <div className="text-muted small mb-2">Тема: {mcqQ.topic}</div>
+                  )}
+                  <h5 className="mb-4">{mcqQ.question}</h5>
+                  <div className="d-flex flex-column gap-2">
+                    {mcqQ.choices.map((label, idx) => {
+                      const qid = String(mcqQ.question_id || mcqQ.id)
+                      return (
+                        <Form.Check
+                          key={idx}
+                          type="radio"
+                          name={`mcq-${qid}`}
+                          id={`mcq-${qid}-${idx}`}
+                          label={label}
+                          checked={mcqChoices[qid] === idx}
+                          onChange={() => setMcqChoices((prev) => ({ ...prev, [qid]: idx }))}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {showDialogueChat && (
+                <>
+                  {allMessages.length === 0 ? (
+                    <div className="text-center text-muted py-5">
+                      {flowPhase === 'intro' ? (
+                        <>
+                          <Spinner animation="border" size="sm" className="me-2" />
+                          <p className="mt-2 mb-0">Загрузка приветствия…</p>
+                        </>
+                      ) : (
+                        <>
+                          <h5>Начало экзамена</h5>
+                          <p>Ответьте на вопрос в поле ниже</p>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="d-flex flex-column gap-3">
+                      {allMessages.map((msg, idx) => (
+                        <div
+                          key={idx}
+                          className={`d-flex ${msg.sender === 'user' ? 'justify-content-end' : 'justify-content-start'}`}
                         >
-                          {new Date().toLocaleTimeString('ru-RU')}
-                        </small>
-                      </div>
-                    </div>
-                  ))}
-                  {evaluation?.is_correct && (
-                    <div className="d-flex justify-content-start">
-                      <div className="p-3 rounded bg-success bg-opacity-25 border border-success">
-                        <strong>Правильно!</strong>
-                        {evaluation.evaluation?.overall_feedback && (
-                          <p className="mb-0 mt-1 small">{evaluation.evaluation.overall_feedback}</p>
-                        )}
-                        <Button size="sm" variant="success" className="mt-2" onClick={moveToNextQuestion}>
-                          Следующий вопрос
-                        </Button>
-                      </div>
+                          <div
+                            className={`p-3 rounded ${
+                              msg.sender === 'user'
+                                ? 'bg-primary text-white'
+                                : msg.type === 'question'
+                                ? 'bg-white border border-primary'
+                                : msg.type === 'welcome'
+                                ? 'bg-white border border-primary border-2'
+                                : 'bg-white border'
+                            }`}
+                            style={{ maxWidth: '85%' }}
+                          >
+                            {msg.type === 'welcome' && (
+                              <Badge bg="primary" className="mb-1" style={{ fontSize: '0.65rem' }}>
+                                Система
+                              </Badge>
+                            )}
+                            {msg.type === 'question' && (
+                              <Badge bg="info" className="mb-1" style={{ fontSize: '0.65rem' }}>
+                                Вопрос
+                              </Badge>
+                            )}
+                            <div className="mb-1">{msg.text}</div>
+                            {msg.tactic && (
+                              <Badge bg="secondary" className="me-1" style={{ fontSize: '0.65rem' }}>{msg.tactic}</Badge>
+                            )}
+                            <small
+                              className={`d-block mt-1 ${msg.sender === 'user' ? 'text-white-50' : 'text-muted'}`}
+                              style={{ fontSize: '0.7rem' }}
+                            >
+                              {new Date().toLocaleTimeString('ru-RU')}
+                            </small>
+                          </div>
+                        </div>
+                      ))}
+                      {evaluation?.is_correct && (
+                        <div className="d-flex justify-content-start">
+                          <div className="p-3 rounded bg-success bg-opacity-25 border border-success">
+                            <strong>Правильно!</strong>
+                            {evaluation.evaluation?.overall_feedback && (
+                              <p className="mb-0 mt-1 small">{evaluation.evaluation.overall_feedback}</p>
+                            )}
+                            <Button size="sm" variant="success" className="mt-2" onClick={moveToNextQuestion}>
+                              Следующий вопрос
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      {isLoading && (
+                        <div className="d-flex justify-content-start">
+                          <div className="bg-white border p-3 rounded">
+                            <Spinner animation="border" size="sm" className="me-2" />
+                            <span className="text-muted">Оценивается...</span>
+                          </div>
+                        </div>
+                      )}
+                      <div ref={messagesEndRef} />
                     </div>
                   )}
-                  {isLoading && (
-                    <div className="d-flex justify-content-start">
-                      <div className="bg-white border p-3 rounded">
-                        <Spinner animation="border" size="sm" className="me-2" />
-                        <span className="text-muted">Оценивается...</span>
-                      </div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </div>
+                </>
               )}
             </div>
           </div>
 
           <div className="border-top bg-white p-3" style={{ flexShrink: 0 }}>
             <div style={{ maxWidth: '720px', margin: '0 auto' }}>
-              <Form onSubmit={handleSubmitAnswer}>
-                <InputGroup>
-                  <Form.Control
-                    as="textarea"
-                    rows={2}
-                    placeholder={
-                      evaluation && !evaluation.is_correct && evaluation.clarification
-                        ? 'Ответьте на уточняющий вопрос...'
-                        : 'Введите ваш ответ... (Enter — отправить, Shift+Enter — новая строка)'
-                    }
-                    value={answer}
-                    onChange={(e) => setAnswer(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    disabled={isLoading || (!!evaluation?.is_correct)}
-                    style={{ resize: 'none' }}
-                  />
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    disabled={isLoading || !!evaluation?.is_correct || !questionToAnswer}
-                  >
-                    {isLoading ? <Spinner animation="border" size="sm" /> : 'Отправить'}
+              {flowPhase === 'intro' && hasMcqExam && (
+                <div className="d-flex justify-content-end">
+                  <Button variant="primary" size="lg" onClick={startMcqPretest}>
+                    Начать входной тест
                   </Button>
-                </InputGroup>
-              </Form>
+                </div>
+              )}
+              {flowPhase === 'mcq' && mcqQ && (
+                <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                  <Button variant="outline-secondary" disabled={mcqIndex === 0} onClick={() => setMcqIndex((i) => Math.max(0, i - 1))}>
+                    Назад
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={
+                      pretestSubmitting ||
+                      mcqChoices[String(mcqQ.question_id || mcqQ.id)] === undefined
+                    }
+                    onClick={handleMcqNext}
+                  >
+                    {pretestSubmitting ? (
+                      <>
+                        <Spinner animation="border" size="sm" className="me-2" />
+                        Отправка…
+                      </>
+                    ) : mcqIndex < mcqN - 1 ? (
+                      'Далее'
+                    ) : (
+                      'Завершить тест'
+                    )}
+                  </Button>
+                </div>
+              )}
+              {flowPhase === 'topics' && pretestResult && (
+                <div className="d-flex justify-content-end">
+                  <Button variant="success" size="lg" onClick={startDialoguePhase} disabled={isLoading}>
+                    {isLoading ? <Spinner animation="border" size="sm" /> : 'Перейти к диалогу'}
+                  </Button>
+                </div>
+              )}
+              {(flowPhase === 'dialogue' || !hasMcqExam) && (
+                <Form onSubmit={handleSubmitAnswer}>
+                  <InputGroup>
+                    <Form.Control
+                      as="textarea"
+                      rows={2}
+                      placeholder={
+                        evaluation && !evaluation.is_correct && evaluation.clarification
+                          ? 'Ответьте на уточняющий вопрос...'
+                          : 'Введите ваш ответ... (Enter — отправить, Shift+Enter — новая строка)'
+                      }
+                      value={answer}
+                      onChange={(e) => setAnswer(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      disabled={isLoading || (!!evaluation?.is_correct)}
+                      style={{ resize: 'none' }}
+                    />
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      disabled={isLoading || !!evaluation?.is_correct || !questionToAnswer}
+                    >
+                      {isLoading ? <Spinner animation="border" size="sm" /> : 'Отправить'}
+                    </Button>
+                  </InputGroup>
+                </Form>
+              )}
             </div>
           </div>
         </div>

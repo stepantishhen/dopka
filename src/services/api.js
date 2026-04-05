@@ -12,13 +12,19 @@ class ApiService {
 
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`
+    const isFormData = options.body instanceof FormData
+    // Для FormData нельзя задавать Content-Type вручную — нужен boundary от браузера
+    const headers = {
+      ...getAuthHeaders(),
+      ...(options.headers || {}),
+    }
+    if (!isFormData) {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json'
+    }
+
     const config = {
-      headers: {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders(),
-        ...options.headers,
-      },
       ...options,
+      headers,
     }
 
     if (config.body && typeof config.body === 'object' && !(config.body instanceof FormData)) {
@@ -75,6 +81,16 @@ class ApiService {
     const formData = new FormData()
     formData.append('file', file)
     return this.request('/knowledge-base/extract-from-pdf', {
+      method: 'POST',
+      headers: {},
+      body: formData,
+    })
+  }
+
+  async extractFromDOCX(file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return this.request('/knowledge-base/extract-from-docx', {
       method: 'POST',
       headers: {},
       body: formData,
@@ -203,6 +219,14 @@ class ApiService {
     })
   }
 
+  /** Завершить входной MCQ-тест; на бэкенде выставляется порядок вопросов (сначала слабые темы). */
+  async completePretest(sessionId, choices) {
+    return this.request(`/orchestrator/sessions/${sessionId}/pretest`, {
+      method: 'POST',
+      body: { choices },
+    })
+  }
+
   async getInsights(sessionId, studentId) {
     return this.request(`/orchestrator/sessions/${sessionId}/insights`, {
       method: 'POST',
@@ -219,6 +243,11 @@ class ApiService {
 
   async getMetrics() {
     return this.request('/metrics')
+  }
+
+  /** Тестовая среда: код экзамена, демо-логины (только при SEED_TEST_ENV / debug) */
+  async getTestEnvironment() {
+    return this.request('/dev/test-environment')
   }
 
   async getTeacherStudents() {
@@ -279,6 +308,62 @@ class ApiService {
     formData.append('questions_per_unit', '3')
 
     return this.request('/exams/create-from-pdf', {
+      method: 'POST',
+      headers: {},
+      body: formData,
+    })
+  }
+
+  async createExamFromDOCX(file, name = null, numQuestions = 10, adaptive = true) {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (name) {
+      formData.append('name', name)
+    }
+    formData.append('num_questions', numQuestions.toString())
+    formData.append('adaptive', adaptive.toString())
+    formData.append('questions_per_unit', '3')
+    return this.request('/exams/create-from-docx', {
+      method: 'POST',
+      headers: {},
+      body: formData,
+    })
+  }
+
+  async getTeacherMonitoringSessions() {
+    return this.request('/teacher/monitoring/sessions')
+  }
+
+  async getTeacherAnalyticsByExam() {
+    return this.request('/teacher/analytics/by-exam')
+  }
+
+  async exportAnalyticsJson() {
+    return this.request('/teacher/export/analytics?format=json')
+  }
+
+  async downloadAnalyticsCsv() {
+    const token = localStorage.getItem('token')
+    const url = `${this.baseURL}/teacher/export/analytics?format=csv`
+    const response = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: response.statusText }))
+      throw new Error(err.detail || `HTTP ${response.status}`)
+    }
+    const blob = await response.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `analytics_${new Date().toISOString().slice(0, 16).replace(/[:T]/, '_')}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  async importStudentsCsv(file) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return this.request('/teacher/students/import', {
       method: 'POST',
       headers: {},
       body: formData,

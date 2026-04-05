@@ -33,7 +33,8 @@ services:
       - DATABASE_URL=postgresql://exam:exam@db:5432/exam
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
       - DEBUG=True
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost
+      - SEED_TEST_ENV=true
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost
     volumes:
       - .:/app
       - backend_data:/app/backend/data
@@ -41,6 +42,14 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    # Только «процесс отвечает»; LLM при этом не вызывается (см. поле llm в JSON /api/health)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      # Первый старт может долго грузить ML-зависимости до bind порта
+      start_period: 300s
 
   frontend:
     build:
@@ -50,12 +59,15 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - VITE_API_BASE_URL=http://localhost:8000/api
+      # Запросы с браузера идут на тот же хост:порт, что и Vite; Vite проксирует /api → backend
+      - VITE_API_BASE_URL=/api
+      - DOCKER_BACKEND_PROXY=http://backend:8000
     volumes:
       - .:/app
       - /app/node_modules
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

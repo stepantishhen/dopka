@@ -1,10 +1,13 @@
 FROM python:3.12-slim
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
+RUN apt-get -o Acquire::Retries=6 -o Acquire::http::Timeout=120 update \
+    && apt-get -o Acquire::Retries=6 install -y --no-install-recommends \
+        build-essential \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

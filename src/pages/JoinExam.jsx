@@ -7,7 +7,8 @@ import api from '../services/api'
 const JoinExam = () => {
   const { code } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, login } = useAuth()
+  const [guestName, setGuestName] = useState('')
   const [joinCode, setJoinCode] = useState(code || '')
   const [exam, setExam] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -47,17 +48,51 @@ const JoinExam = () => {
     }
   }
 
+  const handleGuestStart = (e) => {
+    e?.preventDefault()
+    const name = guestName.trim()
+    if (!name) return
+    login('student', name)
+    navigate(`/join/${(code || joinCode || '').trim()}`)
+  }
+
   if (!user) {
     return (
       <Container className="py-5">
-        <Card className="text-center">
-          <Card.Body>
-            <p>Для присоединения к экзамену необходимо войти в систему</p>
-            <Button variant="primary" onClick={() => navigate(`/login?join=${code || joinCode || ''}`)}>
-              Войти
-            </Button>
-          </Card.Body>
-        </Card>
+        <Row className="justify-content-center">
+          <Col md={8} lg={6}>
+            <Card>
+              <Card.Header>
+                <h4 className="mb-0">Вход для прохождения экзамена</h4>
+              </Card.Header>
+              <Card.Body>
+                <p className="text-muted small">
+                  Укажите имя для отчёта преподавателю или войдите по email на странице входа.
+                </p>
+                <Form onSubmit={handleGuestStart} className="mb-3">
+                  <Form.Label>Ваше имя</Form.Label>
+                  <InputGroup className="mb-2">
+                    <Form.Control
+                      type="text"
+                      placeholder="Иван Иванов"
+                      value={guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                      maxLength={120}
+                    />
+                    <Button type="submit" variant="success" disabled={!guestName.trim()}>
+                      Продолжить
+                    </Button>
+                  </InputGroup>
+                </Form>
+                <div className="d-grid gap-2">
+                  <Button variant="outline-primary" onClick={() => navigate(`/login?join=${code || joinCode || ''}`)}>
+                    Войти по email / пароль
+                  </Button>
+                </div>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
       </Container>
     )
   }

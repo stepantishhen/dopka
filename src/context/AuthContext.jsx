@@ -53,6 +53,8 @@ export const AuthProvider = ({ children }) => {
 
   const isStudent = () => user?.role === 'student'
   const isTeacher = () => user?.role === 'teacher'
+  const isAdmin = () => user?.role === 'admin'
+  const isStaff = () => user?.role === 'teacher' || user?.role === 'admin'
 
   const value = {
     user,
@@ -61,7 +63,9 @@ export const AuthProvider = ({ children }) => {
     loginWithCredentials,
     logout,
     isStudent,
-    isTeacher
+    isTeacher,
+    isAdmin,
+    isStaff
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

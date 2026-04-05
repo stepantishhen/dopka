@@ -10,6 +10,7 @@ from backend.schemas.knowledge_base import (
 )
 from pydantic import BaseModel
 from backend.services.knowledge_service import KnowledgeService
+from backend.services.document_extract import text_from_docx
 
 logger = logging.getLogger("exam_system.knowledge_base")
 router = APIRouter()
@@ -30,13 +31,13 @@ async def get_knowledge_items(
     items = []
     for unit in units:
         items.append(KnowledgeItemResponse(
-            id=unit["unit_id"],
-            title=unit["title"],
-            content=unit["definition"],
-            category=unit.get("content_type", ""),
-            tags=unit.get("common_errors", []),
-            createdAt=unit["metadata"]["created_at"],
-            updatedAt=unit["metadata"]["updated_at"]
+            id=unit.unit_id,
+            title=unit.title,
+            content=unit.definition,
+            category=unit.content_type or "",
+            tags=unit.common_errors or [],
+            createdAt=unit.metadata.get("created_at", ""),
+            updatedAt=unit.metadata.get("updated_at", ""),
         ))
     
     if search:
@@ -160,17 +161,47 @@ async def extract_from_pdf(
         logger.debug("extract_from_pdf read bytes=%s", len(contents))
         text = ""
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
-            for i, page in enumerate(pdf.pages[:10]):
+            for i, page in enumerate(pdf.pages[:40]):
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-        
+
+        if not (text or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось извлечь текст из PDF (скан без OCR или защищённый файл). Попробуйте другой PDF или загрузите текст вручную.",
+            )
+
         units = service.extract_knowledge_from_text(text)
         logger.info("extract_from_pdf success units_count=%s", len(units))
         return {"units": [unit.model_dump() for unit in units], "count": len(units)}
     except Exception as e:
         logger.exception("extract_from_pdf error: %s", e)
         raise HTTPException(status_code=400, detail=f"Ошибка при обработке PDF: {str(e)}")
+
+
+@router.post("/extract-from-docx")
+async def extract_from_docx(
+    file: UploadFile = File(...),
+    request: Request = None,
+    service: KnowledgeService = Depends(get_knowledge_service),
+):
+    logger.info("extract_from_docx file=%s", getattr(file, "filename", None))
+    try:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Пустой файл")
+        text = text_from_docx(contents)
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Не удалось извлечь текст из DOCX")
+        units = service.extract_knowledge_from_text(text)
+        logger.info("extract_from_docx success units_count=%s", len(units))
+        return {"units": [unit.model_dump() for unit in units], "count": len(units)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("extract_from_docx error: %s", e)
+        raise HTTPException(status_code=400, detail=f"Ошибка при обработке DOCX: {str(e)}")
 
 
 @router.post("/units/{unit_id}/generate-questions")
@@ -199,7 +230,7 @@ async def get_didactic_units(
     service: KnowledgeService = Depends(get_knowledge_service)
 ):
     units = service.get_all_units()
-    return [DidacticUnitResponse(**unit) for unit in units]
+    return [DidacticUnitResponse.model_validate(unit) for unit in units]
 
 
 @router.get("/units/{unit_id}", response_model=DidacticUnitResponse)
@@ -211,5 +242,5 @@ async def get_didactic_unit(
     unit = service.get_unit(unit_id)
     if not unit:
         raise HTTPException(status_code=404, detail="Единица не найдена")
-    return DidacticUnitResponse(**unit.model_dump())
+    return DidacticUnitResponse.model_validate(unit)
 

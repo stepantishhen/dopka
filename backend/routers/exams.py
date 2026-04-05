@@ -1,14 +1,19 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from typing import List, Optional
 import pdfplumber
 import io
 
 from backend.schemas.exams import (
-    ExamCreate, ExamResponse, ExamSubmission, EvaluationResponse,
-    CreateExamFromMaterialsRequest
+    ExamCreate,
+    ExamResponse,
+    ExamSubmission,
+    EvaluationResponse,
+    CreateExamFromMaterialsRequest,
+    exam_to_response,
 )
 from backend.services.exam_service import ExamService
+from backend.services.document_extract import text_from_docx
 from backend.models.exam_system import ExamConfig, StudentAnswer
 
 logger = logging.getLogger("exam_system.exams")
@@ -29,7 +34,7 @@ async def create_exam(
     exam_config = ExamConfig(**exam_data.dict())
     exam = service.create_exam(exam_config)
     logger.info("create_exam success exam_id=%s join_code=%s", exam.exam_id, exam.join_code)
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.get("/current", response_model=Optional[ExamResponse])
@@ -40,7 +45,7 @@ async def get_current_exam(
     exam = service.get_current_exam()
     if not exam:
         return None
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.get("/{exam_id}", response_model=ExamResponse)
@@ -54,7 +59,7 @@ async def get_exam(
     if not exam:
         logger.warning("get_exam not found exam_id=%s", exam_id)
         raise HTTPException(status_code=404, detail="Экзамен не найден")
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.post("/{exam_id}/submit", response_model=EvaluationResponse)
@@ -70,7 +75,7 @@ async def submit_exam(
         logger.warning("submit_exam exam not found exam_id=%s", exam_id)
         raise HTTPException(status_code=404, detail="Экзамен не найден")
     answers = [StudentAnswer(**ans.dict()) for ans in submission.answers]
-    evaluation = service.evaluate_student_answers(submission.student_id, answers)
+    evaluation = service.evaluate_student_answers(submission.student_id, answers, exam=exam)
     logger.info("submit_exam evaluated student_id=%s percentage=%.1f", submission.student_id, evaluation.get("percentage", 0))
     return EvaluationResponse(**evaluation)
 
@@ -86,7 +91,7 @@ async def get_exam_by_join_code(
     if not exam:
         logger.warning("get_exam_by_join_code not found join_code=%s", join_code)
         raise HTTPException(status_code=404, detail="Экзамен с таким кодом не найден")
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.post("/create-sample", response_model=ExamResponse)
@@ -97,7 +102,7 @@ async def create_sample_exam(
     logger.info("create_sample_exam")
     exam = service.create_sample_exam()
     logger.info("create_sample_exam success exam_id=%s join_code=%s", exam.exam_id, exam.join_code)
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.get("/")
@@ -107,7 +112,7 @@ async def list_exams(
 ):
     count = len(service.exams)
     logger.debug("list_exams count=%s", count)
-    exams = [ExamResponse(**exam.dict()) for exam in service.exams.values()]
+    exams = [exam_to_response(exam) for exam in service.exams.values()]
     return {"exams": exams, "count": count}
 
 
@@ -133,7 +138,10 @@ async def create_exam_from_materials(
     if not unit_ids:
         raise HTTPException(
             status_code=400,
-            detail="Не найдено единиц знаний. Загрузите материалы или выберите единицы."
+            detail=(
+                "Не найдено единиц знаний: модель не вернула разборчивый JSON с полем units, либо список пуст. "
+                "См. логи бэкенда (extract_knowledge_from_text). Попробуйте сократить текст или повторить запрос."
+            ),
         )
     
 
@@ -162,7 +170,10 @@ async def create_exam_from_materials(
     if not all_questions:
         raise HTTPException(
             status_code=400,
-            detail="Не удалось сгенерировать вопросы. Проверьте наличие материалов в базе знаний."
+            detail=(
+                "Не удалось собрать вопросы для экзамена: генерация по единицам не дала ни одного вопроса. "
+                "См. логи (generate_questions_for_unit). Частая причина — неверный формат JSON от модели."
+            ),
         )
     
 
@@ -180,7 +191,7 @@ async def create_exam_from_materials(
     )
     exam = service.create_exam(exam_config, questions=all_questions)
     logger.info("create_exam_from_materials success exam_id=%s questions=%s", exam.exam_id, len(all_questions))
-    return ExamResponse(**exam.dict())
+    return exam_to_response(exam)
 
 
 @router.post("/create-from-pdf", response_model=ExamResponse)
@@ -200,7 +211,7 @@ async def create_exam_from_pdf(
         logger.debug("create_exam_from_pdf read bytes=%s", len(contents))
         text = ""
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
-            for page in pdf.pages[:20]:  
+            for page in pdf.pages[:40]:  
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
@@ -260,8 +271,81 @@ async def create_exam_from_pdf(
         )
         exam = service.create_exam(exam_config, questions=all_questions)
         logger.info("create_exam_from_pdf success exam_id=%s questions=%s", exam.exam_id, len(all_questions))
-        return ExamResponse(**exam.dict())
+        return exam_to_response(exam)
     except Exception as e:
         logger.exception("create_exam_from_pdf error: %s", e)
         raise HTTPException(status_code=400, detail=f"Ошибка при обработке PDF: {str(e)}")
+
+
+@router.post("/create-from-docx", response_model=ExamResponse)
+async def create_exam_from_docx(
+    request: Request,
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    num_questions: int = Form(10),
+    adaptive: bool = Form(True),
+    questions_per_unit: int = Form(3),
+    service: ExamService = Depends(get_exam_service),
+):
+    knowledge_service = request.app.state.knowledge_service
+    logger.info("create_exam_from_docx file=%s num_questions=%s", getattr(file, "filename", None), num_questions)
+    try:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Пустой файл")
+        text = text_from_docx(contents)
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Не удалось извлечь текст из DOCX")
+
+        units = knowledge_service.extract_knowledge_from_text(text)
+        unit_ids = [unit.unit_id for unit in units]
+        if not unit_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось извлечь единицы знаний из документа",
+            )
+
+        all_questions = []
+        for unit_id in unit_ids[:20]:
+            unit = knowledge_service.get_unit(unit_id)
+            if not unit:
+                continue
+            if not unit.questions or sum(len(qs) for qs in unit.questions.values()) == 0:
+                knowledge_service.generate_questions_for_unit(
+                    unit_id,
+                    num_questions=questions_per_unit,
+                )
+                unit = knowledge_service.get_unit(unit_id)
+            for q_type in ["understanding", "application", "analysis"]:
+                if unit.questions.get(q_type):
+                    for q in unit.questions[q_type]:
+                        q_with_unit = q.copy()
+                        q_with_unit["unit_id"] = unit_id
+                        all_questions.append(q_with_unit)
+
+        if not all_questions:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось сгенерировать вопросы",
+            )
+        if len(all_questions) > num_questions:
+            import random
+
+            all_questions = random.sample(all_questions, num_questions)
+
+        exam_name = name or file.filename or "Экзамен из DOCX"
+        exam_config = ExamConfig(
+            name=exam_name,
+            adaptive=adaptive,
+            num_questions=len(all_questions),
+            unit_ids=unit_ids,
+        )
+        exam = service.create_exam(exam_config, questions=all_questions)
+        logger.info("create_exam_from_docx success exam_id=%s questions=%s", exam.exam_id, len(all_questions))
+        return exam_to_response(exam)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("create_exam_from_docx error: %s", e)
+        raise HTTPException(status_code=400, detail=f"Ошибка при обработке DOCX: {str(e)}")
 

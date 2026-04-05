@@ -143,6 +143,75 @@ def get_by_session_id(session_id: str) -> Optional[Dict[str, Any]]:
         db.close()
 
 
+def list_all_sessions(limit: int = 2000) -> List[Dict[str, Any]]:
+    """Все сохранённые сессии аналитики (для экспорта)."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(StudentSessionAnalytics)
+            .order_by(StudentSessionAnalytics.updated_at.desc())
+            .limit(limit)
+            .all()
+        )
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "student_id": r.student_id,
+                "session_id": r.session_id,
+                "exam_id": r.exam_id,
+                "metrics": _parse_json(r.metrics, []),
+                "insights": _parse_json(r.insights, {}),
+                "total_score": float(r.total_score) if r.total_score else None,
+                "max_total_score": float(r.max_total_score) if r.max_total_score else None,
+                "questions_answered": r.questions_answered or 0,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            })
+        return out
+    finally:
+        db.close()
+
+
+def summarize_by_exam(limit: int = 5000) -> List[Dict[str, Any]]:
+    """
+    Агрегация сохранённых сессий по exam_id: число попыток, средний %, упоминания практики.
+    """
+    rows = list_all_sessions(limit=limit)
+    by_eid: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        raw = (r.get("exam_id") or "").strip()
+        eid = raw or "_none"
+        if eid not in by_eid:
+            by_eid[eid] = {
+                "exam_id": None if eid == "_none" else raw,
+                "sessions_count": 0,
+                "total_score_sum": 0.0,
+                "max_total_score_sum": 0.0,
+                "with_score": 0,
+                "practical_mentions": 0,
+            }
+        a = by_eid[eid]
+        a["sessions_count"] += 1
+        ts = r.get("total_score")
+        ms = r.get("max_total_score")
+        if ts is not None and ms is not None and float(ms) > 0:
+            a["total_score_sum"] += float(ts)
+            a["max_total_score_sum"] += float(ms)
+            a["with_score"] += 1
+        for m in r.get("metrics") or []:
+            if isinstance(m, dict) and m.get("practical_experience_signal"):
+                a["practical_mentions"] += 1
+    out: List[Dict[str, Any]] = []
+    for _, a in by_eid.items():
+        if a["with_score"] and a["max_total_score_sum"] > 0:
+            a["avg_percent"] = round(100.0 * (a["total_score_sum"] / a["max_total_score_sum"]), 1)
+        else:
+            a["avg_percent"] = None
+        out.append(a)
+    out.sort(key=lambda x: x["sessions_count"], reverse=True)
+    return out
+
+
 def list_students_with_analytics() -> List[Dict[str, Any]]:
     db = SessionLocal()
     try:

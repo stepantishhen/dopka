@@ -4,12 +4,14 @@ from typing import Dict, Any
 from backend.services.agents.base_agent import BaseAgent
 from backend.models.session import AgentRequest, AgentResponse, AgentType
 from backend.services.llm_client import LLMClient
+from backend.services.answer_scoring import get_answer_scoring_service
 
 
 class CriticAgent(BaseAgent):
     def __init__(self):
         super().__init__(AgentType.CRITIC)
         self.llm = LLMClient()
+        self._scoring = get_answer_scoring_service()
     
     def _safe_parse_json(self, text: str) -> Dict[str, Any]:
         if not text:
@@ -69,7 +71,9 @@ class CriticAgent(BaseAgent):
         return f"Контекст диалога (последние реплики):\n{raw}\n\n"
 
     async def _evaluate_answer(self, context: Dict[str, Any]) -> AgentResponse:
-        question = context.get("question", {})
+        question = context.get("question", "")
+        if isinstance(question, dict):
+            question = question.get("question", "") or str(question)
         answer = context.get("answer", "")
         reference_answer = context.get("reference_answer", "")
         criteria = context.get("criteria", [])
@@ -91,51 +95,35 @@ class CriticAgent(BaseAgent):
         already_earned = float(context.get("already_earned") or 0)
         question_info = ""
         if num_questions is not None and question_number is not None:
-            question_info = f"Это вопрос {question_number} из {num_questions}. Весь экзамен — 100 баллов суммарно. Уже набрано за предыдущие вопросы: {already_earned:.0f}. За этот вопрос можно выставить не более {max_for_question:.1f} баллов. Минимум для сдачи экзамена — 56 баллов. НЕ ВЫХОДИ за 0 и за максимум для этого вопроса.\n\n"
+            question_info = (
+                f"Это вопрос {question_number} из {num_questions}. Весь экзамен — 100 баллов суммарно. "
+                f"Уже набрано за предыдущие вопросы: {already_earned:.0f}. "
+                f"За этот вопрос можно выставить не более {max_for_question:.1f} баллов. "
+                f"Минимум для сдачи экзамена — 56 баллов. Не выходи за 0 и за максимум для этого вопроса.\n\n"
+            )
 
-        system_prompt = """Ты эксперт-преподаватель. Оцениваешь ответ на один вопрос экзамена.
-
-ВЕСЬ ЭКЗАМЕН В СУММЕ = 100 баллов. Минимум для сдачи — 56 баллов. Нельзя выходить за минимум и максимум.
-Тебе передают: сколько баллов уже набрано, и максимум баллов за текущий вопрос. Ты выставляешь балл только за этот вопрос (от 0 до указанного максимума). Сумма по всем вопросам не должна превышать 100.
-- is_correct = true только если ответ по смыслу верный и по теме.
-- Неверный/не по теме — is_correct: false, score ближе к 0.
-- Частичное понимание — is_correct: false, средний балл за долю вопроса.
-- Верный ответ — is_correct: true, ставь долю от максимума за этот вопрос в зависимости от полноты.
-Строго: score не больше переданного max_score_for_this_question и не меньше 0."""
-        user_prompt = f"""{dialogue_block}{question_info}Вопрос: {question}
-Эталонный ответ: {reference_answer}
-Критерии: {json.dumps(criteria, ensure_ascii=False)}
-Ответ студента: {answer}
-
-Выставь балл за этот вопрос от 0 до {max_for_question:.1f} (не больше). Формат ответа ТОЛЬКО JSON:
-{{
-    "score": число от 0 до {max_for_question:.1f},
-    "max_score": {max_for_question:.1f},
-    "is_correct": true только если ответ верный по смыслу,
-    "overall_feedback": "Краткая обратная связь",
-    "criteria_scores": []
-}}"""
-        
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-            response_text = self.llm.chat(messages, temperature=0.3, max_tokens=1000)
-            
-            result = self._safe_parse_json(response_text)
+            result = self._scoring.compare_and_score(
+                question=str(question),
+                reference_answer=str(reference_answer or ""),
+                student_answer=str(answer or ""),
+                criteria=criteria if isinstance(criteria, list) else [],
+                max_for_question=max_for_question,
+                dialogue_context=dialogue_block,
+                question_info=question_info,
+            )
             if result:
                 score_val = result.get("score", 0)
                 result["max_score"] = max_for_question
                 result["score"] = max(0.0, min(max_for_question, float(score_val) if score_val is not None else 0))
                 if "is_correct" not in result or result.get("is_correct") is None:
                     result["is_correct"] = result["score"] >= (max_for_question * 0.56)
-                if result["score"] < (max_for_question * 0.56) and not result.get("is_correct"):
+                if result["score"] < (max_for_question * 0.56):
                     result["is_correct"] = False
                 return self._create_response(True, {"evaluation": result})
-            
+
             return self._create_response(False, error="Failed to parse evaluation")
-        
+
         except Exception as e:
             return self._create_response(False, error=str(e))
     

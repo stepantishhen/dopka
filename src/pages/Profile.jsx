@@ -1,11 +1,13 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Container, Card, Form, Button, Row, Col, Badge, Alert } from 'react-bootstrap'
 import { useChat } from '../context/ChatContext'
 import { useAuth } from '../context/AuthContext'
+import api from '../services/api'
 
 const Profile = () => {
-  const { chats, knowledgeBase } = useChat()
-  const { user, isTeacher } = useAuth()
+  const { chats } = useChat()
+  const { user, isTeacher, isStaff } = useAuth()
+  const [kbCount, setKbCount] = useState(0)
   const [profile, setProfile] = useState(() => {
     const saved = localStorage.getItem('profile')
     return saved ? JSON.parse(saved) : {
@@ -28,6 +30,22 @@ const Profile = () => {
     alert('Профиль сохранен!')
   }
 
+  useEffect(() => {
+    if (!isStaff()) return
+    let cancelled = false
+    api
+      .getKnowledgeItems()
+      .then((items) => {
+        if (!cancelled) setKbCount(Array.isArray(items) ? items.length : 0)
+      })
+      .catch(() => {
+        if (!cancelled) setKbCount(0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, user?.role])
+
   const totalMessages = chats.reduce((sum, chat) => sum + chat.messages.length, 0)
   const totalChats = chats.length
 
@@ -39,8 +57,12 @@ const Profile = () => {
             <Card.Header>
               <h4 className="mb-0">
                 Настройки профиля
-                <Badge bg={isTeacher() ? 'success' : 'primary'} className="ms-2">
-                  {isTeacher() ? 'Преподаватель' : 'Студент'}
+                <Badge bg={isStaff() ? 'success' : 'primary'} className="ms-2">
+                  {user?.role === 'admin'
+                    ? 'Администратор'
+                    : isTeacher()
+                      ? 'Преподаватель'
+                      : 'Студент'}
                 </Badge>
               </h4>
             </Card.Header>
@@ -95,11 +117,11 @@ const Profile = () => {
             </Card.Header>
             <Card.Body>
               <div className="mb-3">
-                {isTeacher() ? (
+                {isStaff() ? (
                   <>
                     <div className="d-flex justify-content-between align-items-center mb-2">
                       <span>Материалов в базе знаний:</span>
-                      <Badge bg="primary">{knowledgeBase.length}</Badge>
+                      <Badge bg="primary">{kbCount}</Badge>
                     </div>
                     <div className="d-flex justify-content-between align-items-center mb-2">
                       <span>Всего диалогов студентов:</span>

@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 
 const Analytics = () => {
   const { user } = useAuth()
+  const staff = user && (user.role === 'teacher' || user.role === 'admin')
   const [metrics, setMetrics] = useState(null)
   const [students, setStudents] = useState([])
   const [selectedStudentId, setSelectedStudentId] = useState(null)
@@ -14,21 +15,66 @@ const Analytics = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [studentsError, setStudentsError] = useState(null)
-
-  const isTeacher = user?.role === 'teacher'
+  const [monitoring, setMonitoring] = useState(null)
+  const [monitoringLoading, setMonitoringLoading] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [byExam, setByExam] = useState(null)
+  const [byExamLoading, setByExamLoading] = useState(false)
 
   useEffect(() => {
     loadMetrics()
-    if (isTeacher) loadStudents()
-  }, [isTeacher])
+    if (staff) loadStudents()
+  }, [staff])
 
   useEffect(() => {
-    if (isTeacher && selectedStudentId) {
+    if (!staff) return
+    let cancelled = false
+    const run = async () => {
+      try {
+        setByExamLoading(true)
+        const data = await api.getTeacherAnalyticsByExam()
+        if (!cancelled) setByExam(data?.exams || [])
+      } catch {
+        if (!cancelled) setByExam(null)
+      } finally {
+        if (!cancelled) setByExamLoading(false)
+      }
+    }
+    run()
+    return () => {
+      cancelled = true
+    }
+  }, [staff])
+
+  useEffect(() => {
+    if (staff && selectedStudentId) {
       loadStudentAnalytics(selectedStudentId)
     } else {
       setStudentAnalytics(null)
     }
-  }, [isTeacher, selectedStudentId])
+  }, [staff, selectedStudentId])
+
+  useEffect(() => {
+    if (!staff) return
+    let cancelled = false
+    const loadMonitoring = async () => {
+      try {
+        setMonitoringLoading(true)
+        const data = await api.getTeacherMonitoringSessions()
+        if (!cancelled) setMonitoring(data)
+      } catch {
+        if (!cancelled) setMonitoring(null)
+      } finally {
+        if (!cancelled) setMonitoringLoading(false)
+      }
+    }
+    loadMonitoring()
+    const t = setInterval(loadMonitoring, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [staff])
 
   const loadMetrics = async () => {
     try {
@@ -44,7 +90,7 @@ const Analytics = () => {
   }
 
   const loadStudents = async () => {
-    if (!isTeacher) return
+    if (!staff) return
     try {
       setStudentsLoading(true)
       setStudentsError(null)
@@ -71,7 +117,7 @@ const Analytics = () => {
     }
   }
 
-  if (isLoading && !isTeacher) {
+  if (isLoading && !staff) {
     return (
       <Container className="py-4">
         <div className="text-center">
@@ -81,7 +127,7 @@ const Analytics = () => {
     )
   }
 
-  if (error && !isTeacher) {
+  if (error && !staff) {
     return (
       <Container className="py-4">
         <Alert variant="danger">{error}</Alert>
@@ -92,10 +138,119 @@ const Analytics = () => {
   return (
     <Container className="py-4">
       <h2 className="mb-4">
-        {isTeacher ? 'Аналитика по студентам' : 'Аналитика системы'}
+        {staff ? 'Аналитика по студентам' : 'Аналитика системы'}
       </h2>
 
-      {isTeacher && (
+      {staff && (
+        <Row className="mb-3">
+          <Col>
+            <Card className="mb-3">
+              <Card.Header>Сводка по экзаменам</Card.Header>
+              <Card.Body>
+                {byExamLoading ? (
+                  <Spinner animation="border" size="sm" />
+                ) : byExam?.length ? (
+                  <div className="table-responsive">
+                    <table className="table table-sm mb-0">
+                      <thead>
+                        <tr>
+                          <th>Экзамен (id)</th>
+                          <th>Прохождений</th>
+                          <th>Средний %</th>
+                          <th>Упоминаний практики</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {byExam.map((row) => (
+                          <tr key={row.exam_id || '_none'}>
+                            <td>
+                              <small className="text-muted">{row.exam_id || '—'}</small>
+                            </td>
+                            <td>{row.sessions_count}</td>
+                            <td>{row.avg_percent != null ? `${row.avg_percent}%` : '—'}</td>
+                            <td>{row.practical_mentions}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <span className="text-muted">Нет данных по завершённым сессиям</span>
+                )}
+              </Card.Body>
+            </Card>
+            <div className="d-flex flex-wrap gap-2 align-items-center mb-2">
+              <Button
+                variant="outline-primary"
+                size="sm"
+                disabled={exportBusy}
+                onClick={async () => {
+                  try {
+                    setExportBusy(true)
+                    const data = await api.exportAnalyticsJson()
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+                    const a = document.createElement('a')
+                    a.href = URL.createObjectURL(blob)
+                    a.download = `analytics_export_${new Date().toISOString().slice(0, 10)}.json`
+                    a.click()
+                    URL.revokeObjectURL(a.href)
+                  } catch (e) {
+                    alert(e.message || 'Ошибка экспорта')
+                  } finally {
+                    setExportBusy(false)
+                  }
+                }}
+              >
+                Экспорт JSON
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                disabled={exportBusy}
+                onClick={async () => {
+                  try {
+                    setExportBusy(true)
+                    await api.downloadAnalyticsCsv()
+                  } catch (e) {
+                    alert(e.message || 'Ошибка экспорта CSV')
+                  } finally {
+                    setExportBusy(false)
+                  }
+                }}
+              >
+                Экспорт CSV
+              </Button>
+            </div>
+            <Card className="mb-3">
+              <Card.Header>Активные сессии экзаменов</Card.Header>
+              <Card.Body>
+                {monitoringLoading ? (
+                  <Spinner animation="border" size="sm" />
+                ) : monitoring?.sessions?.length ? (
+                  <ListGroup variant="flush">
+                    {monitoring.sessions.map((s) => (
+                      <ListGroup.Item key={s.session_id}>
+                        <small className="text-muted">{s.session_id}</small>
+                        <div>
+                          Студент: {s.student_id}
+                          {s.exam_id && ` · Экзамен: ${s.exam_id}`}
+                        </div>
+                        <small>
+                          Вопросов: {s.questions_answered ?? 0} · Реплик: {s.dialogue_turns ?? 0} · {s.status}
+                        </small>
+                      </ListGroup.Item>
+                    ))}
+                  </ListGroup>
+                ) : (
+                  <span className="text-muted">Нет активных сессий</span>
+                )}
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      {staff && (
         <Row className="mb-4">
           <Col md={4}>
             <Card>
@@ -216,9 +371,9 @@ const Analytics = () => {
         </Row>
       )}
 
-      {(!isTeacher || metrics) && (
+      {(!staff || metrics) && (
         <>
-          <h5 className="mt-4 mb-3">{isTeacher ? 'Метрики системы' : ''}</h5>
+          <h5 className="mt-4 mb-3">{staff ? 'Метрики системы' : ''}</h5>
           {metrics && (
             <Row className="mb-4">
               <Col md={4}>

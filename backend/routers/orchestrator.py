@@ -1,11 +1,11 @@
 import logging
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Dict, Any
 
 from backend.schemas.orchestrator import (
     SessionCreate, SessionResponse, SessionCompleteResponse,
-    AnswerSubmission, AnswerResponse, NextQuestionRequest, InsightsRequest, InsightsResponse
+    AnswerSubmission, AnswerResponse, NextQuestionRequest, InsightsRequest, InsightsResponse,
+    PretestSubmission, PretestCompleteResponse,
 )
 from backend.services.orchestrator import CoreOrchestrator
 
@@ -24,24 +24,13 @@ async def create_session(
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
     logger.info("create_session student_id=%s exam_id=%s", session_data.student_id, session_data.exam_id)
+    exam_service = getattr(request.app.state, "exam_service", None)
     session = orchestrator.create_session(
         student_id=session_data.student_id,
-        exam_id=session_data.exam_id
+        exam_id=session_data.exam_id,
+        exam_service=exam_service,
     )
-    if session_data.exam_id:
-        exam_service = getattr(request.app.state, "exam_service", None)
-        if exam_service:
-            exam = exam_service.get_exam(session_data.exam_id)
-            if exam and getattr(exam, "questions", None):
-                first_q = exam.questions[0]
-                session.dialogue_history.append({
-                    "sender": "ai",
-                    "text": first_q.get("question", ""),
-                    "type": "question",
-                    "question_id": first_q.get("question_id"),
-                    "timestamp": datetime.now().isoformat(),
-                })
-                logger.info("create_session added first question to dialogue exam_id=%s", session_data.exam_id)
+    # Первый вопрос выдаётся только через POST .../next-question (единый порядок и shuffle)
     logger.info("create_session success session_id=%s", session.session_id)
     return SessionResponse(
         session_id=session.session_id,
@@ -50,7 +39,9 @@ async def create_session(
         current_question_id=session.current_question_id,
         status=session.status.value if hasattr(session.status, "value") else "active",
         created_at=session.created_at,
-        updated_at=session.updated_at
+        updated_at=session.updated_at,
+        exam_flow_phase=session.exam_flow_phase,
+        pretest_completed=session.pretest_completed,
     )
 
 
@@ -108,7 +99,14 @@ async def complete_session(
     orchestrator: CoreOrchestrator = Depends(get_orchestrator)
 ):
     try:
+        session = orchestrator.get_session(session_id)
+        student_id = session.student_id if session else None
         result = orchestrator.complete_session(session_id)
+        if student_id:
+            try:
+                await orchestrator.generate_insights(session_id, student_id)
+            except Exception as ex:
+                logger.warning("complete_session: generate_insights failed session_id=%s: %s", session_id, ex)
         return SessionCompleteResponse(**result)
     except ValueError as e:
         logger.warning("complete_session ValueError session_id=%s: %s", session_id, e)
@@ -142,7 +140,26 @@ async def get_session(
         max_total_score=max_total,
         questions_answered=len(session.answered_questions) if status_str == "completed" else None,
         passed=(min(100, total_score or 0) >= 56) if (total_score is not None) else None,
+        exam_flow_phase=session.exam_flow_phase,
+        pretest_completed=session.pretest_completed,
     )
+
+
+@router.post("/sessions/{session_id}/pretest", response_model=PretestCompleteResponse)
+async def complete_pretest(
+    session_id: str,
+    body: PretestSubmission,
+    request: Request,
+    orchestrator: CoreOrchestrator = Depends(get_orchestrator),
+):
+    exam_service = getattr(request.app.state, "exam_service", None)
+    if not exam_service:
+        raise HTTPException(status_code=500, detail="Exam service unavailable")
+    try:
+        result = orchestrator.complete_pretest(session_id, body.choices, exam_service)
+        return PretestCompleteResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/sessions/{session_id}/next-question")
@@ -166,6 +183,8 @@ async def get_next_question(
         msg = str(e)
         if "завершён" in msg or "completed" in msg.lower():
             raise HTTPException(status_code=403, detail=msg)
+        if "входной тест" in msg:
+            raise HTTPException(status_code=400, detail=msg)
         logger.warning("get_next_question ValueError session_id=%s: %s", session_id, e)
         raise HTTPException(status_code=404, detail=msg)
     except Exception as e:

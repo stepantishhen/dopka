@@ -17,6 +17,51 @@ from backend.services.knowledge_service import KnowledgeService
 
 logger = logging.getLogger("exam_system.orchestrator")
 
+_EXAM_WELCOME_MESSAGE = (
+    "Здравствуйте! Я проведу с вами экзамен. Сначала короткий тест с вариантами ответов — "
+    "так мы увидим, какие темы у вас в порядке, а какие лучше проработать в диалоге. "
+    "После теста я покажу краткую сводку и мы перейдём к развёрнутым ответам и подсказкам, "
+    "пока вы не ответите верно на каждый вопрос. Нажмите «Начать входной тест», когда будете готовы."
+)
+
+
+def _exam_questions_all_mcq(questions: Optional[List]) -> bool:
+    if not questions:
+        return False
+    for q in questions:
+        if not isinstance(q, dict):
+            return False
+        ch = q.get("choices")
+        if not isinstance(ch, list) or len(ch) < 2:
+            return False
+        if q.get("correct_choice") is None:
+            return False
+    return True
+
+# Эвристика: студент ссылается на практический опыт (учёт в метриках для преподавателя)
+_PRACTICAL_MARKERS = (
+    "практик",
+    "опыт",
+    "работал",
+    "работаю",
+    "стажировк",
+    "интернатур",
+    "проект",
+    "кейс",
+    "на работе",
+    "в компании",
+    "лаборатор",
+    "practice",
+    "internship",
+    "project",
+    "hands-on",
+)
+
+
+def _mentions_practical_experience(text: str) -> bool:
+    t = (text or "").lower()
+    return any(m in t for m in _PRACTICAL_MARKERS)
+
 
 class CoreOrchestrator:
     def __init__(self, knowledge_service: KnowledgeService):
@@ -30,7 +75,12 @@ class CoreOrchestrator:
         self.sessions: Dict[str, SessionState] = {}
         self.workflows: Dict[str, Workflow] = {}
     
-    def create_session(self, student_id: str, exam_id: Optional[str] = None) -> SessionState:
+    def create_session(
+        self,
+        student_id: str,
+        exam_id: Optional[str] = None,
+        exam_service: Optional[Any] = None,
+    ) -> SessionState:
         session_id = f"session_{uuid.uuid4().hex[:8]}"
         logger.info("create_session session_id=%s student_id=%s exam_id=%s", session_id, student_id, exam_id)
         session = SessionState(
@@ -39,12 +89,123 @@ class CoreOrchestrator:
             exam_id=exam_id,
             status=SessionStatus.ACTIVE,
         )
+        if exam_id and exam_service:
+            exam = exam_service.get_exam(exam_id)
+            if exam and _exam_questions_all_mcq(getattr(exam, "questions", None)):
+                session.exam_flow_phase = "pretest"
+                session.pretest_completed = False
+                session.dialogue_history.append({
+                    "sender": "ai",
+                    "text": _EXAM_WELCOME_MESSAGE,
+                    "type": "welcome",
+                    "timestamp": datetime.now().isoformat(),
+                })
         self.sessions[session_id] = session
         return session
+
+    def complete_pretest(
+        self,
+        session_id: str,
+        choices: Dict[str, int],
+        exam_service: Any,
+    ) -> Dict[str, Any]:
+        """Завершить входной MCQ-тест: порядок вопросов в диалоге — сначала слабые темы."""
+        session = self.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        if session.status == SessionStatus.COMPLETED:
+            raise ValueError("Экзамен уже завершён")
+        if not session.exam_id:
+            raise ValueError("Входной тест только для экзамена с вопросами")
+        exam = exam_service.get_exam(session.exam_id)
+        if not exam or not _exam_questions_all_mcq(getattr(exam, "questions", None)):
+            raise ValueError("Этот экзамен не использует входной тест с вариантами")
+        if session.pretest_completed:
+            raise ValueError("Входной тест уже завершён")
+
+        questions = exam.questions or []
+        per_question: Dict[str, bool] = {}
+        topic_stats: Dict[str, Dict[str, int]] = {}
+
+        for q in questions:
+            qid = str(q.get("question_id") or q.get("id") or "")
+            if not qid:
+                continue
+            topic = str(q.get("topic") or "Общее")
+            if topic not in topic_stats:
+                topic_stats[topic] = {"correct": 0, "total": 0}
+            topic_stats[topic]["total"] += 1
+            correct_i = int(q.get("correct_choice", 0))
+            picked = choices.get(qid)
+            if picked is None:
+                raise ValueError(f"Не указан ответ для вопроса {qid}")
+            ok = int(picked) == correct_i
+            per_question[qid] = ok
+            if ok:
+                topic_stats[topic]["correct"] += 1
+
+        weak_ids = [qid for qid, ok in per_question.items() if not ok]
+        session.weak_question_ids = list(weak_ids)
+        all_ids = [str(q.get("question_id") or q.get("id")) for q in questions if q.get("question_id") or q.get("id")]
+        rest = [i for i in all_ids if i not in weak_ids]
+        w = list(weak_ids)
+        random.shuffle(w)
+        random.shuffle(rest)
+        session.question_order = w + rest
+        session.pretest_completed = True
+        session.exam_flow_phase = "dialogue"
+        session.updated_at = datetime.now().isoformat()
+
+        strong_topics = []
+        weak_topics = []
+        for topic, st in sorted(topic_stats.items()):
+            total = st["total"]
+            correct = st["correct"]
+            entry = {"topic": topic, "correct": correct, "total": total}
+            if correct == total:
+                strong_topics.append(entry)
+            elif correct == 0:
+                weak_topics.append(entry)
+            else:
+                weak_topics.append(entry)
+
+        logger.info(
+            "complete_pretest session_id=%s weak_n=%s topics_strong=%s topics_weak=%s",
+            session_id,
+            len(weak_ids),
+            len(strong_topics),
+            len(weak_topics),
+        )
+        return {
+            "pretest_completed": True,
+            "per_question": per_question,
+            "strong_topics": strong_topics,
+            "weak_topics": weak_topics,
+            "weak_question_ids": weak_ids,
+        }
     
     def get_session(self, session_id: str) -> Optional[SessionState]:
         return self.sessions.get(session_id)
-    
+
+    def list_active_sessions(self) -> List[Dict[str, Any]]:
+        """Активные диалоговые сессии (для мониторинга преподавателем)."""
+        out: List[Dict[str, Any]] = []
+        for session_id, s in self.sessions.items():
+            if s.status == SessionStatus.COMPLETED:
+                continue
+            st = s.status.value if hasattr(s.status, "value") else str(s.status)
+            out.append({
+                "session_id": session_id,
+                "student_id": s.student_id,
+                "exam_id": s.exam_id,
+                "status": st,
+                "questions_answered": len(s.answered_questions or []),
+                "dialogue_turns": len(s.dialogue_history or []),
+                "updated_at": s.updated_at,
+            })
+        out.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+        return out
+
     def _is_answer_empty_or_skip(self, answer: str) -> bool:
         if not answer or not answer.strip():
             return True
@@ -204,7 +365,9 @@ class CoreOrchestrator:
         is_correct = evaluation.get("is_correct", False)
         if is_correct:
             session.current_simplification_level = 0
-        session.answered_questions.append(question_id)
+            # Считаем вопрос пройденным только при верном ответе — иначе студент остаётся на том же вопросе
+            if question_id not in session.answered_questions:
+                session.answered_questions.append(question_id)
         
         dialogue_message = {
             "sender": "user",
@@ -222,7 +385,8 @@ class CoreOrchestrator:
             "clarification": None,
             "error_analysis": None,
             "reasoning_analysis": None,
-            "tactic": None
+            "tactic": None,
+            "feedback": evaluation.get("overall_feedback") or None,
         }
         
         if not is_correct:
@@ -311,7 +475,9 @@ class CoreOrchestrator:
             "question_id": question_id,
             "evaluation": evaluation,
             "tactic_used": result.get("tactic"),
+            "practical_experience_signal": _mentions_practical_experience(answer),
         }
+
         student_analytics_repo.append_metric(
             session_id=session_id,
             student_id=session.student_id,
@@ -345,6 +511,8 @@ class CoreOrchestrator:
         if exam_service and session.exam_id:
             exam = exam_service.get_exam(session.exam_id)
             if exam and getattr(exam, "questions", None):
+                if _exam_questions_all_mcq(exam.questions) and not session.pretest_completed:
+                    raise ValueError("Сначала завершите входной тест с вариантами ответов")
                 answered = set(session.answered_questions)
                 if session.question_order is None:
                     ids = [q.get("question_id") or q.get("id") for q in exam.questions if q.get("question_id") or q.get("id")]
